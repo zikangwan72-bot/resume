@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 138" role="img" aria-label="万秭康头像占位图">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f3f5f8"/>
+      <stop offset="1" stop-color="#cbd3df"/>
+    </linearGradient>
+    <linearGradient id="shirt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1f2937"/>
+      <stop offset="1" stop-color="#050608"/>
+    </linearGradient>
+  </defs>
+  <rect width="108" height="138" fill="url(#bg)"/>
+  <ellipse cx="54" cy="49" rx="22" ry="25" fill="#d7a989"/>
+  <path d="M34 45c0-17 10-28 25-28 11 0 20 8 20 21 0 7-2 12-5 17-4-11-12-19-26-19-7 0-12 2-14 9z" fill="#171717"/>
+  <path d="M34 90c5-12 16-20 30-20s25 8 31 20l12 48H18z" fill="url(#shirt)"/>
+  <path d="M47 74l7 22 8-22 8 28-16 15-16-15z" fill="#111827"/>
+  <path d="M41 53c3 8 8 12 15 12 6 0 11-4 14-12" fill="none" stroke="#9b6b55" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="46" cy="48" r="2" fill="#1f2937"/>
+  <circle cx="62" cy="48" r="2" fill="#1f2937"/>
+  <path d="M48 59c4 2 9 2 13 0" fill="none" stroke="#7a4f43" stroke-width="1.5" stroke-linecap="round"/>
+</svg>

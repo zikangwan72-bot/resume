@@ -1,3 +1,4 @@
+import profileImage from './assets/profile.svg'
 import './App.css'
 
 const strengths = [
@@ -72,9 +73,7 @@ function App() {
           <p>25岁 ｜ 4年经验</p>
           <p>15104578031 ｜ 1453357093@qq.com</p>
         </div>
-        <div className="photo-placeholder" aria-label="头像占位">
-          <span>照片</span>
-        </div>
+        <img className="profile-photo" src={profileImage} alt="万秭康头像" />
       </header>
 
       <Section title="教育背景">
