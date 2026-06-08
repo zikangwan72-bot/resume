@@ -68,13 +68,13 @@ function App() {
     <main className="resume-page">
       <header className="hero">
         <div className="hero-copy">
-          <h1>万秭康</h1>
+          <h1>李江月</h1>
           <p className="career-goal">致力于成为优秀产品经理</p>
           <p>求职意向：产品经理 ｜ 西安 ｜ 随时到岗</p>
           <p>25岁 ｜ 4年经验</p>
           <p>15104578031 ｜ 1453357093@qq.com</p>
         </div>
-        <img className="profile-photo" src={profileImage} alt="万秭康头像" />
+        <img className="profile-photo" src={profileImage} alt="李江月头像" />
       </header>
 
       <Section title="教育背景">
