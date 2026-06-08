@@ -69,6 +69,7 @@ function App() {
       <header className="hero">
         <div className="hero-copy">
           <h1>万秭康</h1>
+          <p className="career-goal">致力于成为优秀产品经理</p>
           <p>求职意向：产品经理 ｜ 西安 ｜ 随时到岗</p>
           <p>25岁 ｜ 4年经验</p>
           <p>15104578031 ｜ 1453357093@qq.com</p>
