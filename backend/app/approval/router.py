@@ -1,11 +1,11 @@
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -43,6 +43,8 @@ class SubmitRequest(BaseModel):
     def require_a_submission_target(self) -> "SubmitRequest":
         if self.process_app_id is None and self.type_id is None:
             raise ValueError("process_app_id is required")
+        if self.process_app_id is not None and self.type_id is not None:
+            raise ValueError("process_app_id and type_id cannot be used together")
         return self
 
 
@@ -62,19 +64,6 @@ def _next_node_index(flow_snapshot: list[dict], current_index: int) -> int | Non
         {node["index"] for node in flow_snapshot if node["index"] > current_index}
     )
     return later_indexes[0] if later_indexes else None
-
-
-def _reset_nodes_at_index(db: Session, request_id: int, node_index: int) -> None:
-    nodes = db.scalars(
-        select(ApprovalNode).where(
-            ApprovalNode.request_id == request_id,
-            ApprovalNode.node_index == node_index,
-        )
-    ).all()
-    for node in nodes:
-        node.status = "pending"
-        node.comment = None
-        node.acted_at = None
 
 
 def _current_request_for_node(db: Session, node: ApprovalNode) -> ApprovalRequest:
@@ -182,10 +171,10 @@ def _is_empty_value(value: object) -> bool:
     return value is None or (isinstance(value, str) and not value.strip()) or value == []
 
 
-def _form_data_error(message: str) -> HTTPException:
+def _form_data_error(message: str, field_id: str | None = None) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        detail={"code": "invalid_form_data", "message": message},
+        detail={"code": "invalid_form_data", "message": message, "field_id": field_id},
     )
 
 
@@ -193,6 +182,7 @@ def _validate_form_data(form_data: dict, form_schema: dict) -> None:
     fields = form_schema.get("fields") if isinstance(form_schema, dict) else None
     if not isinstance(fields, list):
         raise _form_data_error("流程表单定义无效")
+    field_definitions: dict[str, dict] = {}
     for field in fields:
         if not isinstance(field, dict):
             raise _form_data_error("流程表单定义无效")
@@ -200,35 +190,124 @@ def _validate_form_data(form_data: dict, form_schema: dict) -> None:
         field_type = field.get("type")
         if not isinstance(field_id, str) or not field_id.strip() or field_type == "section":
             continue
-        value = form_data.get(field_id)
-        label = field.get("label", field_id)
-        if field.get("required") and _is_empty_value(value):
-            raise _form_data_error(f"请填写：{label}")
-        if _is_empty_value(value):
-            continue
-        if field_type in {"number", "money"} and (
-            isinstance(value, bool) or not isinstance(value, int | float)
+        field_definitions[field_id] = field
+    for field_id in form_data:
+        if field_id not in field_definitions:
+            raise _form_data_error("提交了未定义字段", field_id)
+    for field_id, field in field_definitions.items():
+        _validate_field_value(field, form_data.get(field_id), field_id)
+
+
+def _validate_field_value(field: dict, value: object, field_id: str) -> None:
+    label = field.get("label", field_id)
+    field_type = field.get("type")
+    if field.get("required") and _is_empty_value(value):
+        raise _form_data_error(f"请填写：{label}", field_id)
+    if _is_empty_value(value):
+        return
+    if field_type in {"number", "money"}:
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise _form_data_error(f"{label}必须是数字", field_id)
+    elif field_type in {"text", "textarea", "user", "department"}:
+        if not isinstance(value, str):
+            raise _form_data_error(f"{label}格式不正确", field_id)
+    elif field_type == "date":
+        _validate_date(value, field_id, label)
+    elif field_type == "date_range":
+        _validate_date_range(value, field_id, label)
+    elif field_type in {"radio", "select"}:
+        _validate_option(value, field, field_id, label)
+    elif field_type == "checkbox":
+        if not isinstance(value, list):
+            raise _form_data_error(f"{label}必须是列表", field_id)
+        for option in value:
+            _validate_option(option, field, field_id, label)
+    elif field_type == "attachment":
+        if not isinstance(value, str) and not (
+            isinstance(value, list) and all(isinstance(item, str) for item in value)
         ):
-            raise _form_data_error(f"{label}必须是数字")
-        if field_type in {
-            "text",
-            "textarea",
-            "date",
-            "user",
-            "department",
-            "attachment",
-        } and not isinstance(value, str):
-            raise _form_data_error(f"{label}格式不正确")
-        if field_type in {"radio", "select"}:
-            options = field.get("options")
-            if options is not None and (not isinstance(options, list) or value not in options):
-                raise _form_data_error(f"{label}选项无效")
+            raise _form_data_error(f"{label}格式不正确", field_id)
+    elif field_type == "detail_table":
+        _validate_detail_table(value, field, field_id, label)
+    else:
+        raise _form_data_error(f"{label}字段类型不受支持", field_id)
+
+
+def _validate_option(value: object, field: dict, field_id: str, label: object) -> None:
+    options = field.get("options")
+    if options is not None and (not isinstance(options, list) or value not in options):
+        raise _form_data_error(f"{label}选项无效", field_id)
+
+
+def _validate_date(value: object, field_id: str, label: object) -> date:
+    if not isinstance(value, str):
+        raise _form_data_error(f"{label}必须是日期", field_id)
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise _form_data_error(f"{label}日期格式不正确", field_id) from exc
+
+
+def _validate_date_range(value: object, field_id: str, label: object) -> None:
+    if not isinstance(value, list) or len(value) != 2:
+        raise _form_data_error(f"{label}必须包含开始和结束日期", field_id)
+    start = _validate_date(value[0], field_id, label)
+    end = _validate_date(value[1], field_id, label)
+    if start > end:
+        raise _form_data_error(f"{label}结束日期不能早于开始日期", field_id)
+
+
+def _validate_detail_table(value: object, field: dict, field_id: str, label: object) -> None:
+    if not isinstance(value, list):
+        raise _form_data_error(f"{label}必须是明细行列表", field_id)
+    columns = field.get("columns")
+    if not isinstance(columns, list):
+        raise _form_data_error(f"{label}列定义无效", field_id)
+    column_definitions: dict[str, dict] = {}
+    for column in columns:
+        if not isinstance(column, dict):
+            raise _form_data_error(f"{label}列定义无效", field_id)
+        column_id = column.get("id", column.get("key"))
+        if not isinstance(column_id, str) or not column_id.strip():
+            raise _form_data_error(f"{label}列定义无效", field_id)
+        column_definitions[column_id] = column
+    for row_index, row in enumerate(value):
+        row_field_id = f"{field_id}.{row_index}"
+        if not isinstance(row, dict):
+            raise _form_data_error(f"{label}每行必须是对象", row_field_id)
+        for column_id in row:
+            if column_id not in column_definitions:
+                raise _form_data_error("提交了未定义明细字段", f"{row_field_id}.{column_id}")
+        for column_id, column in column_definitions.items():
+            _validate_field_value(column, row.get(column_id), f"{row_field_id}.{column_id}")
 
 
 def _is_countersign_node(node: dict) -> bool:
     return node.get("type") in {"countersign", "counter_sign"} or node.get(
         "approval_type"
     ) == "counter_sign"
+
+
+def _flow_node_at_index(request: ApprovalRequest, node_index: int) -> dict | None:
+    return next(
+        (
+            node
+            for node in request.flow_snapshot
+            if isinstance(node, dict) and node.get("index") == node_index
+        ),
+        None,
+    )
+
+
+def _consume_pending_node(
+    db: Session, node: ApprovalNode, status_value: str, comment: str, now: datetime
+) -> bool:
+    result = db.execute(
+        update(ApprovalNode)
+        .where(ApprovalNode.id == node.id, ApprovalNode.status == "pending")
+        .values(status=status_value, comment=comment, acted_at=now)
+    )
+    return result.rowcount == 1
 
 
 def _snapshot_flow(path: list[dict]) -> list[dict]:
@@ -512,9 +591,9 @@ def approve_node(
     request = _current_request_for_node(db, node)
 
     now = datetime.now(UTC)
-    node.status = "approved"
-    node.comment = body.comment
-    node.acted_at = now
+    if not _consume_pending_node(db, node, "approved", body.comment, now):
+        db.rollback()
+        raise HTTPException(status_code=400, detail="该节点已被处理，不可重复操作")
 
     db.add(
         ApprovalAction(
@@ -527,7 +606,7 @@ def approve_node(
         )
     )
 
-    # Counter-sign check: verify ALL nodes at this index are approved
+    db.expire_all()
     sibling_nodes = db.scalars(
         select(ApprovalNode).where(
             ApprovalNode.request_id == request.id,
@@ -539,20 +618,29 @@ def approve_node(
 
     if not all_approved:
         db.commit()
-        db.refresh(node)
+        db.refresh(request)
         return {"data": _request_detail(request, db)}
 
-    # All approved at current index, advance the flow
     next_index = _next_node_index(request.flow_snapshot, node.node_index)
+    request_updates: dict[str, object] = {"updated_at": now}
     if next_index is None:
-        request.status = "approved"
-        request.completed_at = now
+        request_updates.update({"status": "approved", "completed_at": now})
     else:
-        request.current_node_index = next_index
-        _reset_nodes_at_index(db, request.id, next_index)
-    request.updated_at = now
+        request_updates["current_node_index"] = next_index
+    advanced = db.execute(
+        update(ApprovalRequest)
+        .where(
+            ApprovalRequest.id == request.id,
+            ApprovalRequest.status == "pending",
+            ApprovalRequest.current_node_index == node.node_index,
+        )
+        .values(**request_updates)
+    )
+    if advanced.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="该节点已被处理，不可重复操作")
     db.commit()
-    db.refresh(request)
+    request = db.get(ApprovalRequest, request.id)
     return {"data": _request_detail(request, db)}
 
 
@@ -575,71 +663,46 @@ def reject_node(
 
     now = datetime.now(UTC)
     request = _current_request_for_node(db, node)
+    if not _consume_pending_node(db, node, "rejected", body.comment, now):
+        db.rollback()
+        raise HTTPException(status_code=400, detail="该节点已被处理，不可重复操作")
 
-    # Check if this is a counter-sign node
-    is_counter_sign = any(
-        _is_countersign_node(n) and n["index"] == node.node_index
-        for n in request.flow_snapshot
-    )
-
-    if is_counter_sign:
-        # Counter-sign reject: record the rejected index, then return to the previous approver.
-        sibling_nodes = db.scalars(
-            select(ApprovalNode).where(
+    flow_node = _flow_node_at_index(request, node.node_index)
+    if flow_node and _is_countersign_node(flow_node):
+        db.execute(
+            update(ApprovalNode)
+            .where(
                 ApprovalNode.request_id == request.id,
                 ApprovalNode.node_index == node.node_index,
+                ApprovalNode.id != node.id,
+                ApprovalNode.status == "pending",
             )
-        ).all()
-        for sn in sibling_nodes:
-            sn.status = "rejected"
-            sn.comment = sn.comment or body.comment
-            sn.acted_at = sn.acted_at or now
-
-        db.add(
-            ApprovalAction(
-                node_id=node.id,
-                request_id=node.request_id,
-                actor_id=user.id,
-                actor_name=user.display_name,
-                action="reject",
-                comment=body.comment,
-            )
+            .values(status="cancelled", comment=None, acted_at=now)
         )
-
-        if node.node_index > 0:
-            request.current_node_index = node.node_index - 1
-            prev_nodes = db.scalars(
-                select(ApprovalNode).where(
-                    ApprovalNode.request_id == request.id,
-                    ApprovalNode.node_index == node.node_index - 1,
-                )
-            ).all()
-            for pn in prev_nodes:
-                pn.status = "pending"
-                pn.comment = None
-                pn.acted_at = None
-    else:
-        # Normal reject: entire request becomes rejected
-        node.status = "rejected"
-        node.comment = body.comment
-        node.acted_at = now
-        request.status = "rejected"
-        request.completed_at = now
-
-        db.add(
-            ApprovalAction(
-                node_id=node.id,
-                request_id=node.request_id,
-                actor_id=user.id,
-                actor_name=user.display_name,
-                action="reject",
-                comment=body.comment,
-            )
+    db.add(
+        ApprovalAction(
+            node_id=node.id,
+            request_id=node.request_id,
+            actor_id=user.id,
+            actor_name=user.display_name,
+            action="reject",
+            comment=body.comment,
         )
-
-    request.updated_at = now
+    )
+    rejected = db.execute(
+        update(ApprovalRequest)
+        .where(
+            ApprovalRequest.id == request.id,
+            ApprovalRequest.status == "pending",
+            ApprovalRequest.current_node_index == node.node_index,
+        )
+        .values(status="rejected", completed_at=now, updated_at=now)
+    )
+    if rejected.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="该节点已被处理，不可重复操作")
     db.commit()
-    db.refresh(request)
+    request = db.get(ApprovalRequest, request.id)
     return {"data": _request_detail(request, db)}
 
 
@@ -658,14 +721,29 @@ def transfer_node(
     if node.status != "pending":
         raise HTTPException(status_code=400, detail="该节点已被处理，不可转审")
     request = _current_request_for_node(db, node)
+    flow_node = _flow_node_at_index(request, node.node_index)
+    if flow_node is None or flow_node.get("allow_transfer") is not True:
+        raise HTTPException(status_code=400, detail="该节点不允许转审")
+    if body.target_user_id == user.id:
+        raise HTTPException(status_code=400, detail="不能转审给自己")
 
     target = db.get(ApprovalUser, body.target_user_id)
-    if not target:
-        raise HTTPException(status_code=400, detail="目标用户不存在")
+    if not target or not target.is_active:
+        raise HTTPException(status_code=400, detail="目标用户不存在或已停用")
 
     old_approver_name = node.approver_name
-    node.approver_id = target.id
-    node.approver_name = target.display_name
+    transferred = db.execute(
+        update(ApprovalNode)
+        .where(
+            ApprovalNode.id == node.id,
+            ApprovalNode.approver_id == user.id,
+            ApprovalNode.status == "pending",
+        )
+        .values(approver_id=target.id, approver_name=target.display_name)
+    )
+    if transferred.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="该节点已被处理，不可转审")
 
     db.add(
         ApprovalAction(
@@ -678,10 +756,20 @@ def transfer_node(
         )
     )
 
-    request.updated_at = datetime.now(UTC)
-
+    request_updated = db.execute(
+        update(ApprovalRequest)
+        .where(
+            ApprovalRequest.id == request.id,
+            ApprovalRequest.status == "pending",
+            ApprovalRequest.current_node_index == node.node_index,
+        )
+        .values(updated_at=datetime.now(UTC))
+    )
+    if request_updated.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="该节点已被处理，不可转审")
     db.commit()
-    db.refresh(request)
+    request = db.get(ApprovalRequest, request.id)
     return {"data": _request_detail(request, db)}
 
 
