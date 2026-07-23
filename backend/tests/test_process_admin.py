@@ -595,3 +595,36 @@ def test_monitor_requests_support_typed_filters_pagination_and_admin_read_only(
     assert client.get(
         "/api/v1/admin/process-monitor/requests", headers=employee_headers
     ).status_code == 403
+
+
+def test_monitor_countersign_filter_matches_second_pending_approver(
+    client, admin_headers, overdue_request
+):
+    response = client.get(
+        "/api/v1/admin/process-monitor/requests",
+        params={
+            "current_approver_id": "product-user-id",
+            "page": 1,
+            "page_size": 20,
+        },
+        headers=admin_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["total"] == 0
+
+    response = client.get(
+        "/api/v1/admin/process-monitor/requests",
+        params={
+            "current_approver_id": overdue_request.applicant_id,
+            "page": 1,
+            "page_size": 20,
+        },
+        headers=admin_headers,
+    )
+    assert response.status_code == 200
+    item = response.json()["data"]["items"][0]
+    assert response.json()["data"]["total"] == 1
+    assert {approver["id"] for approver in item["current_approvers"]} == {
+        "44444444-4444-4444-4444-444444444444",
+        overdue_request.applicant_id,
+    }

@@ -32,3 +32,20 @@ No whitespace errors.
 ```
 
 Only the focused admin test file and Ruff checks were run. The frontend and Task 6 were not changed.
+
+## Review Fixes
+
+- Countersign approver filtering now uses a correlated SQL `EXISTS`, so any pending approver in the current group matches.
+- Added `current_approvers` with every pending approver in deterministic node-id order. The existing singular `current_approver` remains as the first entry for compatibility.
+- Count and pagination now execute in the database. Selected-page node rows are loaded once and grouped in memory, with batched process-app, version, and user loading instead of per-request queries.
+- Added regression coverage for filtering by the second countersign approver and rendering all current approvers.
+
+Review verification:
+
+```text
+backend/.venv/Scripts/python.exe -m pytest backend/tests/test_process_admin.py -q
+22 passed in 5.55s
+
+backend/.venv/Scripts/ruff.exe check backend/app/approval/admin_router.py backend/tests/test_process_admin.py
+All checks passed!
+```
