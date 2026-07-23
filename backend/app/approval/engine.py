@@ -1,0 +1,321 @@
+from __future__ import annotations
+
+from collections import deque
+from collections.abc import Iterable
+from typing import Any
+
+from app.approval.schemas import DefinitionError
+
+COMPARABLE_FIELD_TYPES = {"number", "money", "text", "textarea", "radio", "select"}
+CONDITION_OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte", "contains", "not_contains"}
+COUNTERSIGN_TYPES = {"counter_sign", "countersign", "counter-sign"}
+
+
+def compare_value(actual: object, operator: str, expected: object) -> bool:
+    operations = {
+        "eq": lambda a, b: a == b,
+        "ne": lambda a, b: a != b,
+        "gt": lambda a, b: a > b,
+        "gte": lambda a, b: a >= b,
+        "lt": lambda a, b: a < b,
+        "lte": lambda a, b: a <= b,
+        "contains": lambda a, b: str(b) in str(a),
+        "not_contains": lambda a, b: str(b) not in str(a),
+    }
+    try:
+        return operations[operator](actual, expected)
+    except (KeyError, TypeError):
+        return False
+
+
+def validate_process_definition(
+    form_schema: dict[str, Any], flow_schema: dict[str, Any], active_user_ids: Iterable[str]
+) -> list[DefinitionError]:
+    errors: list[DefinitionError] = []
+    active_users = set(active_user_ids)
+    fields = _items(form_schema, "fields")
+    nodes = _items(flow_schema, "nodes")
+    edges = _items(flow_schema, "edges")
+
+    field_types = _validate_fields(fields, errors)
+    node_ids, nodes_by_id = _validate_nodes(nodes, active_users, errors)
+    valid_edges = _validate_edges(edges, node_ids, errors)
+
+    starts = [node_id for node_id, node in nodes_by_id.items() if node.get("type") == "start"]
+    ends = [node_id for node_id, node in nodes_by_id.items() if node.get("type") == "end"]
+    if not starts:
+        errors.append(_error("missing_start_node", "流程必须包含一个开始节点"))
+    elif len(starts) > 1:
+        errors.append(_error("multiple_start_nodes", "流程只能包含一个开始节点"))
+    if not ends:
+        errors.append(_error("missing_end_node", "流程必须包含一个结束节点"))
+    elif len(ends) > 1:
+        errors.append(_error("multiple_end_nodes", "流程只能包含一个结束节点"))
+    if not any(node.get("type") == "approval" for node in nodes_by_id.values()):
+        errors.append(_error("missing_approval_node", "流程至少需要一个审批节点"))
+
+    outgoing = _adjacency(valid_edges)
+    if starts:
+        reachable = _reachable(starts[0], outgoing)
+        for node_id in node_ids:
+            if node_id not in reachable:
+                errors.append(_error("disconnected_node", "节点未连接到开始节点", node_id))
+    else:
+        reachable = set()
+
+    if _has_cycle(node_ids, outgoing):
+        errors.append(_error("flow_cycle", "流程图不能包含环路"))
+
+    _validate_condition_edges(nodes_by_id, outgoing, field_types, errors)
+    if ends and starts:
+        _validate_end_reachability(node_ids, starts[0], ends[0], outgoing, errors)
+
+    return errors
+
+
+def resolve_execution_path(
+    form_data: dict[str, Any], flow_schema: dict[str, Any]
+) -> list[dict[str, Any]]:
+    nodes = _items(flow_schema, "nodes")
+    edges = _items(flow_schema, "edges")
+    nodes_by_id = {node.get("id"): node for node in nodes if _valid_id(node.get("id"))}
+    start = next(
+        (node_id for node_id, node in nodes_by_id.items() if node.get("type") == "start"), None
+    )
+    if start is None:
+        raise ValueError("flow_schema requires a start node")
+
+    outgoing = _adjacency(
+        [
+            edge
+            for edge in edges
+            if edge.get("source") in nodes_by_id and edge.get("target") in nodes_by_id
+        ]
+    )
+    current = start
+    visited: set[str] = set()
+    path: list[dict[str, Any]] = []
+
+    while True:
+        if current in visited:
+            raise ValueError("flow_schema contains a cycle")
+        visited.add(current)
+        node = nodes_by_id[current]
+        if node.get("type") == "approval":
+            path.append(node)
+        if node.get("type") == "end":
+            return path
+
+        next_edge = _next_edge(node, outgoing.get(current, []), form_data)
+        if next_edge is None:
+            raise ValueError(f"node {current!r} has no executable outgoing edge")
+        current = next_edge["target"]
+
+
+def _items(schema: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    value = schema.get(key, []) if isinstance(schema, dict) else []
+    return value if isinstance(value, list) else []
+
+
+def _validate_fields(
+    fields: list[dict[str, Any]], errors: list[DefinitionError]
+) -> dict[str, object]:
+    field_types: dict[str, object] = {}
+    for field in fields:
+        field_id = field.get("id")
+        if not _valid_id(field_id):
+            errors.append(_error("invalid_field_id", "表单字段必须使用非空稳定 ID"))
+        elif field_id in field_types:
+            errors.append(_error("duplicate_field_id", "表单字段 ID 不能重复", field_id))
+        else:
+            field_types[field_id] = field.get("type")
+    return field_types
+
+
+def _validate_nodes(
+    nodes: list[dict[str, Any]], active_users: set[str], errors: list[DefinitionError]
+) -> tuple[set[str], dict[str, dict[str, Any]]]:
+    node_ids: set[str] = set()
+    nodes_by_id: dict[str, dict[str, Any]] = {}
+    for node in nodes:
+        node_id = node.get("id")
+        if not _valid_id(node_id):
+            errors.append(_error("invalid_node_id", "流程节点必须使用非空稳定 ID"))
+            continue
+        if node_id in node_ids:
+            errors.append(_error("duplicate_node_id", "流程节点 ID 不能重复", node_id))
+            continue
+        node_ids.add(node_id)
+        nodes_by_id[node_id] = node
+        if node.get("type") == "approval":
+            _validate_approvers(node, active_users, errors)
+    return node_ids, nodes_by_id
+
+
+def _validate_approvers(
+    node: dict[str, Any], active_users: set[str], errors: list[DefinitionError]
+) -> None:
+    node_id = node["id"]
+    approval_type = node.get("approval_type", node.get("subtype", node.get("mode", "single")))
+    if approval_type in COUNTERSIGN_TYPES:
+        approver_ids = node.get("approver_ids")
+        if not isinstance(approver_ids, list) or len(set(approver_ids)) < 2:
+            errors.append(
+                _error("invalid_countersign_approvers", "会签节点至少需要两名不同审批人", node_id)
+            )
+            return
+        for approver_id in approver_ids:
+            if not _valid_id(approver_id) or approver_id not in active_users:
+                errors.append(_error("inactive_approver", "审批人必须是启用员工", node_id))
+    else:
+        approver_id = node.get("approver_id")
+        if not _valid_id(approver_id) or approver_id not in active_users:
+            errors.append(_error("inactive_approver", "审批人必须是启用员工", node_id))
+
+
+def _validate_edges(
+    edges: list[dict[str, Any]], node_ids: set[str], errors: list[DefinitionError]
+) -> list[dict[str, Any]]:
+    valid_edges: list[dict[str, Any]] = []
+    for edge in edges:
+        source, target = edge.get("source"), edge.get("target")
+        if source not in node_ids or target not in node_ids:
+            errors.append(_error("unknown_edge_node", "连线引用了不存在的节点"))
+            continue
+        valid_edges.append(edge)
+    return valid_edges
+
+
+def _validate_condition_edges(
+    nodes_by_id: dict[str, dict[str, Any]],
+    outgoing: dict[str, list[dict[str, Any]]],
+    field_types: dict[str, object],
+    errors: list[DefinitionError],
+) -> None:
+    for node_id, node in nodes_by_id.items():
+        if node.get("type") != "condition":
+            continue
+        condition_edges = outgoing.get(node_id, [])
+        default_edges = [edge for edge in condition_edges if _is_default_edge(edge)]
+        if not default_edges:
+            errors.append(_error("missing_default_branch", "条件节点必须包含默认分支", node_id))
+        elif len(default_edges) > 1:
+            errors.append(
+                _error("multiple_default_branches", "条件节点只能包含一个默认分支", node_id)
+            )
+        if not any(not _is_default_edge(edge) for edge in condition_edges):
+            errors.append(
+                _error("missing_condition_branch", "条件节点至少需要一个条件分支", node_id)
+            )
+        for edge in condition_edges:
+            if _is_default_edge(edge):
+                continue
+            condition = edge.get("condition")
+            if not isinstance(condition, dict):
+                errors.append(_error("invalid_condition", "条件分支必须配置条件", node_id))
+                continue
+            field_id = condition.get("field_id", condition.get("field"))
+            operator = condition.get("operator")
+            if field_id not in field_types:
+                errors.append(_error("unknown_condition_field", "条件引用的字段不存在", node_id))
+            elif field_types[field_id] not in COMPARABLE_FIELD_TYPES:
+                errors.append(
+                    _error("invalid_condition_field_type", "条件引用的字段类型不可比较", node_id)
+                )
+            if operator not in CONDITION_OPERATORS:
+                errors.append(_error("invalid_condition_operator", "条件比较方式无效", node_id))
+
+
+def _validate_end_reachability(
+    node_ids: set[str],
+    start: str,
+    end: str,
+    outgoing: dict[str, list[dict[str, Any]]],
+    errors: list[DefinitionError],
+) -> None:
+    reverse = _reverse_adjacency(outgoing)
+    can_reach_end = _reachable(end, reverse)
+    for node_id in _reachable(start, outgoing):
+        if node_id not in can_reach_end:
+            errors.append(_error("path_does_not_reach_end", "从该节点无法到达结束节点", node_id))
+
+
+def _next_edge(
+    node: dict[str, Any], edges: list[dict[str, Any]], form_data: dict[str, Any]
+) -> dict[str, Any] | None:
+    if node.get("type") != "condition":
+        return edges[0] if edges else None
+    default_edge: dict[str, Any] | None = None
+    for edge in edges:
+        if _is_default_edge(edge):
+            default_edge = edge
+            continue
+        condition = edge.get("condition")
+        if not isinstance(condition, dict):
+            continue
+        field_id = condition.get("field_id", condition.get("field"))
+        expected = condition.get("value", condition.get("expected"))
+        if compare_value(form_data.get(field_id), condition.get("operator", ""), expected):
+            return edge
+    return default_edge
+
+
+def _adjacency(edges: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = {}
+    for edge in edges:
+        result.setdefault(edge["source"], []).append(edge)
+    return result
+
+
+def _reverse_adjacency(
+    outgoing: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = {}
+    for source, edges in outgoing.items():
+        for edge in edges:
+            result.setdefault(edge["target"], []).append({"target": source})
+    return result
+
+
+def _reachable(start: str, outgoing: dict[str, list[dict[str, Any]]]) -> set[str]:
+    seen: set[str] = set()
+    pending = deque([start])
+    while pending:
+        current = pending.popleft()
+        if current in seen:
+            continue
+        seen.add(current)
+        pending.extend(edge["target"] for edge in outgoing.get(current, []))
+    return seen
+
+
+def _has_cycle(node_ids: set[str], outgoing: dict[str, list[dict[str, Any]]]) -> bool:
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(node_id: str) -> bool:
+        if node_id in visiting:
+            return True
+        if node_id in visited:
+            return False
+        visiting.add(node_id)
+        for edge in outgoing.get(node_id, []):
+            if visit(edge["target"]):
+                return True
+        visiting.remove(node_id)
+        visited.add(node_id)
+        return False
+
+    return any(visit(node_id) for node_id in node_ids)
+
+
+def _is_default_edge(edge: dict[str, Any]) -> bool:
+    return edge.get("default") is True or edge.get("is_default") is True
+
+
+def _valid_id(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _error(code: str, message: str, target_id: str | None = None) -> DefinitionError:
+    return DefinitionError(code=code, message=message, target_id=target_id)

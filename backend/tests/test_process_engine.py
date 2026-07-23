@@ -1,0 +1,221 @@
+import pytest
+
+from app.approval.engine import resolve_execution_path, validate_process_definition
+
+FORM_SCHEMA = {
+    "fields": [
+        {"id": "amount", "label": "金额", "type": "money"},
+        {"id": "purpose", "label": "用途", "type": "text"},
+    ]
+}
+
+FLOW_WITH_AMOUNT_BRANCH = {
+    "nodes": [
+        {"id": "start", "type": "start"},
+        {"id": "manager", "type": "approval", "approval_type": "single", "approver_id": "u1"},
+        {"id": "amount_gate", "type": "condition"},
+        {"id": "director", "type": "approval", "approval_type": "single", "approver_id": "u2"},
+        {"id": "finance", "type": "approval", "approval_type": "single", "approver_id": "u3"},
+        {"id": "end", "type": "end"},
+    ],
+    "edges": [
+        {"source": "start", "target": "manager"},
+        {"source": "manager", "target": "amount_gate"},
+        {
+            "source": "amount_gate",
+            "target": "director",
+            "condition": {"field_id": "amount", "operator": "gte", "value": 100000},
+        },
+        {"source": "amount_gate", "target": "finance", "default": True},
+        {"source": "director", "target": "finance"},
+        {"source": "finance", "target": "end"},
+    ],
+}
+
+
+def _error_codes(
+    form_schema: dict, flow_schema: dict, active_users: set[str] | None = None
+) -> set[str]:
+    active_users = active_users or {"u1", "u2", "u3"}
+    return {
+        error.code for error in validate_process_definition(form_schema, flow_schema, active_users)
+    }
+
+
+def test_amount_condition_selects_high_value_branch():
+    path = resolve_execution_path({"amount": 120000}, FLOW_WITH_AMOUNT_BRANCH)
+
+    assert [node["id"] for node in path] == ["manager", "director", "finance"]
+
+
+def test_conditions_use_declared_edge_order_before_default_branch():
+    flow = {
+        **FLOW_WITH_AMOUNT_BRANCH,
+        "edges": [
+            *FLOW_WITH_AMOUNT_BRANCH["edges"][:2],
+            {
+                "source": "amount_gate",
+                "target": "finance",
+                "condition": {"field_id": "amount", "operator": "gte", "value": 50000},
+            },
+            *FLOW_WITH_AMOUNT_BRANCH["edges"][2:],
+        ],
+    }
+
+    path = resolve_execution_path({"amount": 120000}, flow)
+
+    assert [node["id"] for node in path] == ["manager", "finance"]
+
+
+def test_validator_rejects_cycle_and_inactive_approver():
+    cyclic_flow = {
+        "nodes": [
+            {"id": "start", "type": "start"},
+            {
+                "id": "manager",
+                "type": "approval",
+                "approval_type": "single",
+                "approver_id": "inactive",
+            },
+            {"id": "end", "type": "end"},
+        ],
+        "edges": [
+            {"source": "start", "target": "manager"},
+            {"source": "manager", "target": "start"},
+            {"source": "manager", "target": "end"},
+        ],
+    }
+
+    errors = validate_process_definition(FORM_SCHEMA, cyclic_flow, {"active-user"})
+
+    assert {error.code for error in errors} == {"flow_cycle", "inactive_approver"}
+
+
+def test_default_branch_is_required():
+    flow_without_default = {
+        **FLOW_WITH_AMOUNT_BRANCH,
+        "edges": [
+            edge
+            for edge in FLOW_WITH_AMOUNT_BRANCH["edges"]
+            if not (edge["source"] == "amount_gate" and edge.get("default"))
+        ],
+    }
+
+    assert "missing_default_branch" in _error_codes(FORM_SCHEMA, flow_without_default)
+
+
+@pytest.mark.parametrize(
+    ("form_schema", "flow_schema", "expected_code"),
+    [
+        (
+            {"fields": [{"id": "amount", "type": "money"}, {"id": "amount", "type": "money"}]},
+            FLOW_WITH_AMOUNT_BRANCH,
+            "duplicate_field_id",
+        ),
+        (
+            FORM_SCHEMA,
+            {
+                **FLOW_WITH_AMOUNT_BRANCH,
+                "nodes": [
+                    {**node, "id": ""} if node["id"] == "manager" else node
+                    for node in FLOW_WITH_AMOUNT_BRANCH["nodes"]
+                ],
+            },
+            "invalid_node_id",
+        ),
+        (
+            FORM_SCHEMA,
+            {
+                **FLOW_WITH_AMOUNT_BRANCH,
+                "edges": [
+                    {**edge, "target": "missing"} if edge["source"] == "start" else edge
+                    for edge in FLOW_WITH_AMOUNT_BRANCH["edges"]
+                ],
+            },
+            "unknown_edge_node",
+        ),
+        (
+            FORM_SCHEMA,
+            {
+                **FLOW_WITH_AMOUNT_BRANCH,
+                "edges": [
+                    {
+                        **edge,
+                        "condition": {"field_id": "absent", "operator": "eq", "value": 1},
+                    }
+                    if edge["source"] == "amount_gate" and edge.get("condition")
+                    else edge
+                    for edge in FLOW_WITH_AMOUNT_BRANCH["edges"]
+                ],
+            },
+            "unknown_condition_field",
+        ),
+        (
+            {"fields": [{"id": "amount", "type": "attachment"}]},
+            FLOW_WITH_AMOUNT_BRANCH,
+            "invalid_condition_field_type",
+        ),
+    ],
+)
+def test_validator_rejects_unstable_ids_and_invalid_references(
+    form_schema, flow_schema, expected_code
+):
+    assert expected_code in _error_codes(form_schema, flow_schema)
+
+
+def test_validator_rejects_disconnected_nodes():
+    disconnected_flow = {
+        "nodes": [
+            {"id": "start", "type": "start"},
+            {"id": "end", "type": "end"},
+            {"id": "orphan", "type": "approval", "approval_type": "single", "approver_id": "u1"},
+        ],
+        "edges": [{"source": "start", "target": "end"}],
+    }
+
+    codes = _error_codes(FORM_SCHEMA, disconnected_flow)
+
+    assert "disconnected_node" in codes
+
+
+def test_validator_requires_at_least_one_approval_node():
+    flow = {
+        "nodes": [{"id": "start", "type": "start"}, {"id": "end", "type": "end"}],
+        "edges": [{"source": "start", "target": "end"}],
+    }
+
+    assert "missing_approval_node" in _error_codes(FORM_SCHEMA, flow)
+
+
+def test_validator_requires_at_least_two_active_countersign_approvers():
+    flow = {
+        "nodes": [
+            {"id": "start", "type": "start"},
+            {
+                "id": "signers",
+                "type": "approval",
+                "approval_type": "counter_sign",
+                "approver_ids": ["u1"],
+            },
+            {"id": "end", "type": "end"},
+        ],
+        "edges": [{"source": "start", "target": "signers"}, {"source": "signers", "target": "end"}],
+    }
+
+    assert "invalid_countersign_approvers" in _error_codes(FORM_SCHEMA, flow)
+
+
+def test_validator_rejects_paths_that_cannot_reach_end():
+    flow = {
+        **FLOW_WITH_AMOUNT_BRANCH,
+        "nodes": [
+            *FLOW_WITH_AMOUNT_BRANCH["nodes"],
+            {"id": "dead_end", "type": "approval", "approval_type": "single", "approver_id": "u1"},
+        ],
+        "edges": [
+            *FLOW_WITH_AMOUNT_BRANCH["edges"],
+            {"source": "amount_gate", "target": "dead_end", "default": True},
+        ],
+    }
+
+    assert "path_does_not_reach_end" in _error_codes(FORM_SCHEMA, flow)
