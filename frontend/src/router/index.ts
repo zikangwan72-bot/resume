@@ -57,29 +57,24 @@ const router = createRouter({
         },
         // ── 后台管理路由 ──
         {
-          path: 'admin/approval-types',
-          component: () => import('@/views/approval/AdminTypes.vue'),
-          meta: { title: '审批类型管理', permission: 'approval:manage' },
+          path: 'admin/process-apps',
+          component: () => import('@/views/approval/AdminProcessApps.vue'),
+          meta: { title: '流程应用', permission: 'approval:manage' },
         },
         {
-          path: 'admin/form-templates',
-          component: () => import('@/views/approval/AdminFormTemplates.vue'),
-          meta: { title: '表单模板管理', permission: 'approval:manage' },
+          path: 'admin/process-apps/new',
+          component: () => import('@/views/NotFoundView.vue'),
+          meta: { title: '新建流程应用', permission: 'approval:manage' },
         },
         {
-          path: 'admin/flow-templates',
-          component: () => import('@/views/approval/AdminFlowTemplates.vue'),
-          meta: { title: '流程模板管理', permission: 'approval:manage' },
+          path: 'admin/process-apps/:id/edit',
+          component: () => import('@/views/NotFoundView.vue'),
+          meta: { title: '编辑流程应用', permission: 'approval:manage' },
         },
         {
           path: 'admin/users',
           component: () => import('@/views/approval/AdminUsers.vue'),
           meta: { title: '员工与审批角色', permission: 'approval:manage' },
-        },
-        {
-          path: 'admin/approval-logs',
-          component: () => import('@/views/approval/AdminLogs.vue'),
-          meta: { title: '审批日志', permission: 'approval:manage' },
         },
         {
           path: 'modules/:moduleKey',

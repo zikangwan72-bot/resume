@@ -52,10 +52,7 @@ const menuItems = computed(() => {
 
   const admin = [
     { key: '/admin/users', icon: h(UserOutlined), label: '员工与角色', permission: 'approval:manage' },
-    { key: '/admin/approval-types', icon: h(SettingOutlined), label: '审批类型', permission: 'approval:manage' },
-    { key: '/admin/form-templates', icon: h(SettingOutlined), label: '表单模板', permission: 'approval:manage' },
-    { key: '/admin/flow-templates', icon: h(SettingOutlined), label: '流程模板', permission: 'approval:manage' },
-    { key: '/admin/approval-logs', icon: h(AuditOutlined), label: '审批日志', permission: 'approval:manage' },
+    { key: '/admin/process-apps', icon: h(SettingOutlined), label: '流程应用', permission: 'approval:manage' },
   ]
     .filter((item) => auth.can(item.permission))
     .map(({ permission: _, ...item }) => item)
