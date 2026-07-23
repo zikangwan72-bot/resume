@@ -639,3 +639,42 @@ def test_validator_accepts_counter_sign_approval_type():
     }
 
     assert _error_codes(FORM_SCHEMA, flow) == set()
+
+
+def _simple_flow() -> dict:
+    return {
+        "nodes": [
+            {"id": "start", "type": "start"},
+            {"id": "manager", "type": "approval", "approver_id": "u1"},
+            {"id": "end", "type": "end"},
+        ],
+        "edges": [
+            {"source": "start", "target": "manager"},
+            {"source": "manager", "target": "end"},
+        ],
+    }
+
+
+def test_validator_returns_invalid_field_id_for_unhashable_field_id():
+    errors = validate_process_definition(
+        {"fields": [{"id": [], "type": "text"}]}, _simple_flow(), {"u1"}
+    )
+
+    assert "invalid_field_id" in {error.code for error in errors}
+
+
+def test_validator_rejects_section_only_form_as_missing_business_field():
+    form_schema = {"fields": [{"id": "layout", "type": "section"}]}
+
+    assert "missing_business_field" in _error_codes(form_schema, _simple_flow())
+
+
+def test_validator_accepts_section_plus_input_form():
+    form_schema = {
+        "fields": [
+            {"id": "layout", "type": "section"},
+            {"id": "reason", "type": "textarea"},
+        ]
+    }
+
+    assert "missing_business_field" not in _error_codes(form_schema, _simple_flow())

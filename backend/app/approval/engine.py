@@ -4,7 +4,7 @@ from collections import deque
 from collections.abc import Iterable
 from typing import Any
 
-from app.approval.schemas import APPROVAL_TYPES, FIELD_TYPES, DefinitionError
+from app.approval.schemas import APPROVAL_TYPES, BUSINESS_FIELD_TYPES, FIELD_TYPES, DefinitionError
 
 COMPARABLE_FIELD_TYPES = {"number", "money", "text", "textarea", "radio", "select"}
 CONDITION_OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte", "contains", "not_contains"}
@@ -45,7 +45,7 @@ def validate_process_definition(
     )
 
     field_types = _validate_fields(fields, errors)
-    if not field_types:
+    if not any(field_type in BUSINESS_FIELD_TYPES for field_type in field_types.values()):
         errors.append(_error("missing_business_field", "流程至少需要一个业务表单字段"))
     node_ids, nodes_by_id = _validate_nodes(nodes, active_users, errors)
     valid_edges = _validate_edges(edges, node_ids, errors)
@@ -156,6 +156,7 @@ def _validate_fields(
         field_id = field.get("id")
         if not _valid_id(field_id):
             errors.append(_error("invalid_field_id", "表单字段必须使用非空稳定 ID"))
+            continue
         elif field_id in field_ids:
             errors.append(_error("duplicate_field_id", "表单字段 ID 不能重复", field_id))
             continue

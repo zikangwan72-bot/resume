@@ -35,6 +35,7 @@ FIELD_TYPES = frozenset(
         "detail_table",
     }
 )
+BUSINESS_FIELD_TYPES = FIELD_TYPES - {"section"}
 NodeType = Literal["start", "approval", "countersign", "condition", "end"]
 ApprovalType = Literal["single", "counter_sign"]
 APPROVAL_TYPES = frozenset({"single", "counter_sign"})
