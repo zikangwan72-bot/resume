@@ -4,11 +4,10 @@ from collections import deque
 from collections.abc import Iterable
 from typing import Any
 
-from app.approval.schemas import DefinitionError
+from app.approval.schemas import APPROVAL_TYPES, FIELD_TYPES, DefinitionError
 
 COMPARABLE_FIELD_TYPES = {"number", "money", "text", "textarea", "radio", "select"}
 CONDITION_OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte", "contains", "not_contains"}
-COUNTERSIGN_TYPES = {"counter_sign", "countersign", "counter-sign"}
 NODE_TYPES = {"start", "approval", "countersign", "condition", "end"}
 APPROVAL_NODE_TYPES = {"approval", "countersign"}
 
@@ -46,6 +45,8 @@ def validate_process_definition(
     )
 
     field_types = _validate_fields(fields, errors)
+    if not field_types:
+        errors.append(_error("missing_business_field", "流程至少需要一个业务表单字段"))
     node_ids, nodes_by_id = _validate_nodes(nodes, active_users, errors)
     valid_edges = _validate_edges(edges, node_ids, errors)
 
@@ -147,6 +148,7 @@ def _validate_fields(
     fields: list[Any], errors: list[DefinitionError]
 ) -> dict[str, object]:
     field_types: dict[str, object] = {}
+    field_ids: set[str] = set()
     for field in fields:
         if not isinstance(field, dict):
             errors.append(_error("invalid_field_definition", "表单字段必须是对象"))
@@ -154,10 +156,15 @@ def _validate_fields(
         field_id = field.get("id")
         if not _valid_id(field_id):
             errors.append(_error("invalid_field_id", "表单字段必须使用非空稳定 ID"))
-        elif field_id in field_types:
+        elif field_id in field_ids:
             errors.append(_error("duplicate_field_id", "表单字段 ID 不能重复", field_id))
-        else:
-            field_types[field_id] = field.get("type")
+            continue
+        field_ids.add(field_id)
+        field_type = field.get("type")
+        if not isinstance(field_type, str) or field_type not in FIELD_TYPES:
+            errors.append(_error("invalid_field_type", "表单字段类型不受支持", field_id))
+            continue
+        field_types[field_id] = field_type
     return field_types
 
 
@@ -191,7 +198,10 @@ def _validate_approvers(
 ) -> None:
     node_id = node["id"]
     approval_type = node.get("approval_type", node.get("subtype", node.get("mode", "single")))
-    if node.get("type") == "countersign" or approval_type in COUNTERSIGN_TYPES:
+    if not isinstance(approval_type, str) or approval_type not in APPROVAL_TYPES:
+        errors.append(_error("invalid_approval_type", "审批节点模式不受支持", node_id))
+        return
+    if node.get("type") == "countersign" or approval_type == "counter_sign":
         approver_ids = node.get("approver_ids")
         if not isinstance(approver_ids, list) or not all(
             _valid_id(value) for value in approver_ids

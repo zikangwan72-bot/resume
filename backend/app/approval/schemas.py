@@ -17,8 +17,27 @@ FieldType = Literal[
     "section",
     "detail_table",
 ]
+FIELD_TYPES = frozenset(
+    {
+        "text",
+        "textarea",
+        "number",
+        "money",
+        "date",
+        "date_range",
+        "radio",
+        "checkbox",
+        "select",
+        "user",
+        "department",
+        "attachment",
+        "section",
+        "detail_table",
+    }
+)
 NodeType = Literal["start", "approval", "countersign", "condition", "end"]
 ApprovalType = Literal["single", "counter_sign"]
+APPROVAL_TYPES = frozenset({"single", "counter_sign"})
 ComparisonOperator = Literal["eq", "ne", "gt", "gte", "lt", "lte", "contains", "not_contains"]
 
 

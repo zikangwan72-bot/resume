@@ -582,3 +582,60 @@ def test_validator_rejects_end_node_outgoing_edges():
     }
 
     assert "invalid_end_outgoing" in _error_codes(FORM_SCHEMA, flow)
+
+
+def test_validator_rejects_unknown_runtime_field_type():
+    form_schema = {
+        "fields": [
+            {"id": "amount", "type": "money"},
+            {"id": "script", "type": "script"},
+        ]
+    }
+
+    assert "invalid_field_type" in _error_codes(form_schema, FLOW_WITH_AMOUNT_BRANCH)
+
+
+def test_validator_requires_at_least_one_business_form_field():
+    flow = {
+        "nodes": [
+            {"id": "start", "type": "start"},
+            {"id": "manager", "type": "approval", "approver_id": "u1"},
+            {"id": "end", "type": "end"},
+        ],
+        "edges": [
+            {"source": "start", "target": "manager"},
+            {"source": "manager", "target": "end"},
+        ],
+    }
+
+    assert "missing_business_field" in _error_codes({"fields": []}, flow)
+
+
+def test_validator_rejects_unknown_approval_type():
+    flow = {
+        **FLOW_WITH_AMOUNT_BRANCH,
+        "nodes": [
+            {**node, "approval_type": "parallel"} if node["id"] == "manager" else node
+            for node in FLOW_WITH_AMOUNT_BRANCH["nodes"]
+        ],
+    }
+
+    assert "invalid_approval_type" in _error_codes(FORM_SCHEMA, flow)
+
+
+def test_validator_accepts_counter_sign_approval_type():
+    flow = {
+        **FLOW_WITH_AMOUNT_BRANCH,
+        "nodes": [
+            {
+                **node,
+                "approval_type": "counter_sign",
+                "approver_ids": ["u1", "u2"],
+            }
+            if node["id"] == "manager"
+            else node
+            for node in FLOW_WITH_AMOUNT_BRANCH["nodes"]
+        ],
+    }
+
+    assert _error_codes(FORM_SCHEMA, flow) == set()
