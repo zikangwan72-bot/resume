@@ -382,6 +382,11 @@ def test_comparison_mismatch_and_unknown_operator_fall_back_to_default(actual, o
         (FORM_SCHEMA, {**FLOW_WITH_AMOUNT_BRANCH, "edges": [None]}, "invalid_edge_definition"),
         (
             FORM_SCHEMA,
+            {**FLOW_WITH_AMOUNT_BRANCH, "edges": [{"source": [], "target": "end"}]},
+            "invalid_edge_definition",
+        ),
+        (
+            FORM_SCHEMA,
             {
                 "nodes": [
                     {"id": "start", "type": "start"},
@@ -445,6 +450,25 @@ def test_validator_returns_structured_errors_for_malformed_members(
             "edges": [
                 {"source": "start", "target": "approval"},
                 {"source": "approval", "target": "start"},
+            ],
+        },
+        {
+            "nodes": [
+                {"id": "start", "type": "start"},
+                {"id": "end", "type": "end"},
+            ],
+            "edges": [{"source": [], "target": "end"}],
+        },
+        {
+            **FLOW_WITH_AMOUNT_BRANCH,
+            "edges": [
+                {
+                    **edge,
+                    "condition": {"field_id": ["amount"], "operator": "eq", "value": 1},
+                }
+                if edge["source"] == "amount_gate" and edge.get("condition")
+                else edge
+                for edge in FLOW_WITH_AMOUNT_BRANCH["edges"]
             ],
         },
     ],

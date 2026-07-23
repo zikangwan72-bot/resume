@@ -95,13 +95,7 @@ def resolve_execution_path(
     if start is None:
         raise ValueError("flow_schema requires a start node")
 
-    outgoing = _adjacency(
-        [
-            edge
-            for edge in edges
-            if edge.get("source") in nodes_by_id and edge.get("target") in nodes_by_id
-        ]
-    )
+    outgoing = _adjacency(_runtime_edges(edges, nodes_by_id))
     current = start
     visited: set[str] = set()
     path: list[dict[str, Any]] = []
@@ -204,6 +198,9 @@ def _validate_edges(
             errors.append(_error("invalid_edge_definition", "流程连线必须是对象"))
             continue
         source, target = edge.get("source"), edge.get("target")
+        if not _valid_id(source) or not _valid_id(target):
+            errors.append(_error("invalid_edge_definition", "流程连线必须引用稳定节点 ID"))
+            continue
         if source not in node_ids or target not in node_ids:
             errors.append(_error("unknown_edge_node", "连线引用了不存在的节点"))
             continue
@@ -296,12 +293,35 @@ def _next_edge(
             continue
         condition = edge.get("condition")
         if not isinstance(condition, dict):
-            continue
+            raise ValueError("flow_schema contains a malformed condition")
         field_id = condition.get("field_id", condition.get("field"))
+        if not _valid_id(field_id) or not isinstance(condition.get("operator"), str):
+            raise ValueError("flow_schema contains a malformed condition")
         expected = condition.get("value", condition.get("expected"))
         if compare_value(form_data.get(field_id), condition.get("operator", ""), expected):
             return edge
     return default_edge
+
+
+def _runtime_edges(
+    edges: list[dict[str, Any]], nodes_by_id: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    valid_edges: list[dict[str, Any]] = []
+    for edge in edges:
+        source, target = edge.get("source"), edge.get("target")
+        if not _valid_id(source) or not _valid_id(target):
+            raise ValueError("flow_schema contains a malformed edge")
+        if source not in nodes_by_id or target not in nodes_by_id:
+            raise ValueError("flow_schema edge references an unknown node")
+        if nodes_by_id[source].get("type") == "condition" and not _is_default_edge(edge):
+            condition = edge.get("condition")
+            if not isinstance(condition, dict):
+                raise ValueError("flow_schema contains a malformed condition")
+            field_id = condition.get("field_id", condition.get("field"))
+            if not _valid_id(field_id) or not isinstance(condition.get("operator"), str):
+                raise ValueError("flow_schema contains a malformed condition")
+        valid_edges.append(edge)
+    return valid_edges
 
 
 def _adjacency(edges: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
