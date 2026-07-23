@@ -32,7 +32,7 @@ def validate_process_definition(
     form_schema: dict[str, Any], flow_schema: dict[str, Any], active_user_ids: Iterable[str]
 ) -> list[DefinitionError]:
     errors: list[DefinitionError] = []
-    active_users = set(active_user_ids)
+    active_users = set(active_user_ids) if isinstance(active_user_ids, Iterable) else set()
     fields = _items(form_schema, "fields")
     nodes = _items(flow_schema, "nodes")
     edges = _items(flow_schema, "edges")
@@ -55,6 +55,7 @@ def validate_process_definition(
         errors.append(_error("missing_approval_node", "流程至少需要一个审批节点"))
 
     outgoing = _adjacency(valid_edges)
+    _validate_outgoing_edges(nodes_by_id, outgoing, errors)
     if starts:
         reachable = _reachable(starts[0], outgoing)
         for node_id in node_ids:
@@ -76,9 +77,18 @@ def validate_process_definition(
 def resolve_execution_path(
     form_data: dict[str, Any], flow_schema: dict[str, Any]
 ) -> list[dict[str, Any]]:
+    if not isinstance(form_data, dict):
+        raise ValueError("form_data must be an object")
     nodes = _items(flow_schema, "nodes")
     edges = _items(flow_schema, "edges")
+    if not all(isinstance(node, dict) for node in nodes):
+        raise ValueError("flow_schema contains a malformed node")
+    if not all(isinstance(edge, dict) for edge in edges):
+        raise ValueError("flow_schema contains a malformed edge")
+
     nodes_by_id = {node.get("id"): node for node in nodes if _valid_id(node.get("id"))}
+    if len(nodes_by_id) != len(nodes):
+        raise ValueError("flow_schema nodes require unique non-empty IDs")
     start = next(
         (node_id for node_id, node in nodes_by_id.items() if node.get("type") == "start"), None
     )
@@ -118,10 +128,13 @@ def _items(schema: dict[str, Any], key: str) -> list[dict[str, Any]]:
 
 
 def _validate_fields(
-    fields: list[dict[str, Any]], errors: list[DefinitionError]
+    fields: list[Any], errors: list[DefinitionError]
 ) -> dict[str, object]:
     field_types: dict[str, object] = {}
     for field in fields:
+        if not isinstance(field, dict):
+            errors.append(_error("invalid_field_definition", "表单字段必须是对象"))
+            continue
         field_id = field.get("id")
         if not _valid_id(field_id):
             errors.append(_error("invalid_field_id", "表单字段必须使用非空稳定 ID"))
@@ -133,11 +146,14 @@ def _validate_fields(
 
 
 def _validate_nodes(
-    nodes: list[dict[str, Any]], active_users: set[str], errors: list[DefinitionError]
+    nodes: list[Any], active_users: set[str], errors: list[DefinitionError]
 ) -> tuple[set[str], dict[str, dict[str, Any]]]:
     node_ids: set[str] = set()
     nodes_by_id: dict[str, dict[str, Any]] = {}
     for node in nodes:
+        if not isinstance(node, dict):
+            errors.append(_error("invalid_node_definition", "流程节点必须是对象"))
+            continue
         node_id = node.get("id")
         if not _valid_id(node_id):
             errors.append(_error("invalid_node_id", "流程节点必须使用非空稳定 ID"))
@@ -159,13 +175,19 @@ def _validate_approvers(
     approval_type = node.get("approval_type", node.get("subtype", node.get("mode", "single")))
     if approval_type in COUNTERSIGN_TYPES:
         approver_ids = node.get("approver_ids")
-        if not isinstance(approver_ids, list) or len(set(approver_ids)) < 2:
+        if not isinstance(approver_ids, list) or not all(
+            _valid_id(value) for value in approver_ids
+        ):
             errors.append(
                 _error("invalid_countersign_approvers", "会签节点至少需要两名不同审批人", node_id)
             )
             return
+        if len(approver_ids) < 2 or len(set(approver_ids)) != len(approver_ids):
+            errors.append(
+                _error("invalid_countersign_approvers", "会签节点至少需要两名不同审批人", node_id)
+            )
         for approver_id in approver_ids:
-            if not _valid_id(approver_id) or approver_id not in active_users:
+            if approver_id not in active_users:
                 errors.append(_error("inactive_approver", "审批人必须是启用员工", node_id))
     else:
         approver_id = node.get("approver_id")
@@ -174,16 +196,35 @@ def _validate_approvers(
 
 
 def _validate_edges(
-    edges: list[dict[str, Any]], node_ids: set[str], errors: list[DefinitionError]
+    edges: list[Any], node_ids: set[str], errors: list[DefinitionError]
 ) -> list[dict[str, Any]]:
     valid_edges: list[dict[str, Any]] = []
     for edge in edges:
+        if not isinstance(edge, dict):
+            errors.append(_error("invalid_edge_definition", "流程连线必须是对象"))
+            continue
         source, target = edge.get("source"), edge.get("target")
         if source not in node_ids or target not in node_ids:
             errors.append(_error("unknown_edge_node", "连线引用了不存在的节点"))
             continue
         valid_edges.append(edge)
     return valid_edges
+
+
+def _validate_outgoing_edges(
+    nodes_by_id: dict[str, dict[str, Any]],
+    outgoing: dict[str, list[dict[str, Any]]],
+    errors: list[DefinitionError],
+) -> None:
+    for node_id, node in nodes_by_id.items():
+        edge_count = len(outgoing.get(node_id, []))
+        if node.get("type") == "end":
+            if edge_count:
+                errors.append(_error("invalid_end_outgoing", "结束节点不能有出边", node_id))
+        elif node.get("type") != "condition" and edge_count != 1:
+            errors.append(
+                _error("invalid_non_condition_branch", "非条件节点必须有且仅有一条出边", node_id)
+            )
 
 
 def _validate_condition_edges(
@@ -216,6 +257,9 @@ def _validate_condition_edges(
                 continue
             field_id = condition.get("field_id", condition.get("field"))
             operator = condition.get("operator")
+            if not _valid_id(field_id) or not isinstance(operator, str):
+                errors.append(_error("invalid_condition", "条件分支配置格式无效", node_id))
+                continue
             if field_id not in field_types:
                 errors.append(_error("unknown_condition_field", "条件引用的字段不存在", node_id))
             elif field_types[field_id] not in COMPARABLE_FIELD_TYPES:

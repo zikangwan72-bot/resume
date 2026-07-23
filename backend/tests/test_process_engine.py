@@ -88,7 +88,7 @@ def test_validator_rejects_cycle_and_inactive_approver():
 
     errors = validate_process_definition(FORM_SCHEMA, cyclic_flow, {"active-user"})
 
-    assert {error.code for error in errors} == {"flow_cycle", "inactive_approver"}
+    assert {"flow_cycle", "inactive_approver"} <= {error.code for error in errors}
 
 
 def test_default_branch_is_required():
@@ -219,3 +219,236 @@ def test_validator_rejects_paths_that_cannot_reach_end():
     }
 
     assert "path_does_not_reach_end" in _error_codes(FORM_SCHEMA, flow)
+
+
+@pytest.mark.parametrize(
+    ("flow", "expected_code"),
+    [
+        (
+            {
+                "nodes": [
+                    {"id": "approval", "type": "approval", "approver_id": "u1"},
+                    {"id": "end", "type": "end"},
+                ],
+                "edges": [{"source": "approval", "target": "end"}],
+            },
+            "missing_start_node",
+        ),
+        (
+            {
+                "nodes": [
+                    {"id": "start", "type": "start"},
+                    {"id": "second_start", "type": "start"},
+                    {"id": "approval", "type": "approval", "approver_id": "u1"},
+                    {"id": "end", "type": "end"},
+                ],
+                "edges": [
+                    {"source": "start", "target": "approval"},
+                    {"source": "second_start", "target": "approval"},
+                    {"source": "approval", "target": "end"},
+                ],
+            },
+            "multiple_start_nodes",
+        ),
+        (
+            {
+                "nodes": [
+                    {"id": "start", "type": "start"},
+                    {"id": "approval", "type": "approval", "approver_id": "u1"},
+                ],
+                "edges": [{"source": "start", "target": "approval"}],
+            },
+            "missing_end_node",
+        ),
+        (
+            {
+                "nodes": [
+                    {"id": "start", "type": "start"},
+                    {"id": "approval", "type": "approval", "approver_id": "u1"},
+                    {"id": "end", "type": "end"},
+                    {"id": "second_end", "type": "end"},
+                ],
+                "edges": [
+                    {"source": "start", "target": "approval"},
+                    {"source": "approval", "target": "end"},
+                ],
+            },
+            "multiple_end_nodes",
+        ),
+    ],
+)
+def test_validator_requires_exactly_one_start_and_end(flow, expected_code):
+    assert expected_code in _error_codes(FORM_SCHEMA, flow)
+
+
+def test_validator_rejects_duplicate_node_ids():
+    flow = {
+        **FLOW_WITH_AMOUNT_BRANCH,
+        "nodes": [
+            *FLOW_WITH_AMOUNT_BRANCH["nodes"],
+            {
+                "id": "manager",
+                "type": "approval",
+                "approval_type": "single",
+                "approver_id": "u1",
+            },
+        ],
+    }
+
+    assert "duplicate_node_id" in _error_codes(FORM_SCHEMA, flow)
+
+
+def test_validator_rejects_inactive_and_duplicate_countersign_approvers():
+    flow = {
+        "nodes": [
+            {"id": "start", "type": "start"},
+            {
+                "id": "signers",
+                "type": "approval",
+                "approval_type": "counter_sign",
+                "approver_ids": ["u1", "u1", "inactive"],
+            },
+            {"id": "end", "type": "end"},
+        ],
+        "edges": [
+            {"source": "start", "target": "signers"},
+            {"source": "signers", "target": "end"},
+        ],
+    }
+
+    codes = _error_codes(FORM_SCHEMA, flow)
+
+    assert {"invalid_countersign_approvers", "inactive_approver"} <= codes
+
+
+def test_validator_rejects_multiple_default_branches():
+    flow = {
+        **FLOW_WITH_AMOUNT_BRANCH,
+        "edges": [
+            *FLOW_WITH_AMOUNT_BRANCH["edges"],
+            {"source": "amount_gate", "target": "finance", "default": True},
+        ],
+    }
+
+    assert "multiple_default_branches" in _error_codes(FORM_SCHEMA, flow)
+
+
+def test_validator_rejects_branching_from_non_condition_nodes():
+    flow = {
+        **FLOW_WITH_AMOUNT_BRANCH,
+        "edges": [
+            *FLOW_WITH_AMOUNT_BRANCH["edges"],
+            {"source": "manager", "target": "finance"},
+        ],
+    }
+
+    assert "invalid_non_condition_branch" in _error_codes(FORM_SCHEMA, flow)
+
+
+def test_default_branch_is_used_when_conditions_do_not_match():
+    path = resolve_execution_path({"amount": 1}, FLOW_WITH_AMOUNT_BRANCH)
+
+    assert [node["id"] for node in path] == ["manager", "finance"]
+
+
+@pytest.mark.parametrize(
+    ("actual", "operator", "expected"),
+    [("not-a-number", "gte", 100000), (120000, "not-an-operator", 100000)],
+)
+def test_comparison_mismatch_and_unknown_operator_fall_back_to_default(actual, operator, expected):
+    flow = {
+        **FLOW_WITH_AMOUNT_BRANCH,
+        "edges": [
+            {
+                **edge,
+                "condition": {"field_id": "amount", "operator": operator, "value": expected},
+            }
+            if edge["source"] == "amount_gate" and edge.get("condition")
+            else edge
+            for edge in FLOW_WITH_AMOUNT_BRANCH["edges"]
+        ],
+    }
+
+    path = resolve_execution_path({"amount": actual}, flow)
+
+    assert [node["id"] for node in path] == ["manager", "finance"]
+
+
+@pytest.mark.parametrize(
+    ("form_schema", "flow_schema", "expected_code"),
+    [
+        ({"fields": [None]}, FLOW_WITH_AMOUNT_BRANCH, "invalid_field_definition"),
+        (FORM_SCHEMA, {**FLOW_WITH_AMOUNT_BRANCH, "nodes": [None]}, "invalid_node_definition"),
+        (FORM_SCHEMA, {**FLOW_WITH_AMOUNT_BRANCH, "edges": [None]}, "invalid_edge_definition"),
+        (
+            FORM_SCHEMA,
+            {
+                "nodes": [
+                    {"id": "start", "type": "start"},
+                    {
+                        "id": "signers",
+                        "type": "approval",
+                        "approval_type": "counter_sign",
+                        "approver_ids": [["u1"], {"id": "u2"}],
+                    },
+                    {"id": "end", "type": "end"},
+                ],
+                "edges": [
+                    {"source": "start", "target": "signers"},
+                    {"source": "signers", "target": "end"},
+                ],
+            },
+            "invalid_countersign_approvers",
+        ),
+        (
+            FORM_SCHEMA,
+            {
+                **FLOW_WITH_AMOUNT_BRANCH,
+                "edges": [
+                    {
+                        **edge,
+                        "condition": {"field_id": ["amount"], "operator": ["eq"]},
+                    }
+                    if edge["source"] == "amount_gate" and edge.get("condition")
+                    else edge
+                    for edge in FLOW_WITH_AMOUNT_BRANCH["edges"]
+                ],
+            },
+            "invalid_condition",
+        ),
+    ],
+)
+def test_validator_returns_structured_errors_for_malformed_members(
+    form_schema, flow_schema, expected_code
+):
+    errors = validate_process_definition(form_schema, flow_schema, {"u1", "u2", "u3"})
+
+    assert expected_code in {error.code for error in errors}
+
+
+@pytest.mark.parametrize(
+    "flow_schema",
+    [
+        {"nodes": [None], "edges": []},
+        {
+            "nodes": [
+                {"id": "start", "type": "start"},
+                {"id": "approval", "type": "approval"},
+            ],
+            "edges": [{"source": "start", "target": "approval"}],
+        },
+        {
+            "nodes": [
+                {"id": "start", "type": "start"},
+                {"id": "approval", "type": "approval"},
+            ],
+            "edges": [
+                {"source": "start", "target": "approval"},
+                {"source": "approval", "target": "start"},
+            ],
+        },
+    ],
+)
+def test_resolver_raises_value_error_for_malformed_cycle_and_dead_end_graphs(flow_schema):
+    with pytest.raises(ValueError):
+        resolve_execution_path({}, flow_schema)
