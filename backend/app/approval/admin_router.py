@@ -1,15 +1,22 @@
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.approval.database import get_approval_db
 from app.approval.engine import validate_process_definition
-from app.approval.models import ApprovalUser, ProcessApp, ProcessVersion
+from app.approval.models import (
+    ApprovalNode,
+    ApprovalRequest,
+    ApprovalUser,
+    ProcessApp,
+    ProcessVersion,
+)
 from app.approval.schemas import (
     ApprovalUserCreate,
     ApprovalUserUpdate,
@@ -111,6 +118,240 @@ def _apply_process_update(
     if "flow_schema" in updates:
         version.flow_schema = updates["flow_schema"]
     app.updated_at = datetime.now(UTC)
+
+
+MonitorStatus = Literal["pending", "approved", "rejected", "revoked"]
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _current_monitor_node(db: Session, request: ApprovalRequest) -> ApprovalNode | None:
+    return db.scalar(
+        select(ApprovalNode)
+        .where(
+            ApprovalNode.request_id == request.id,
+            ApprovalNode.node_index == request.current_node_index,
+            ApprovalNode.status == "pending",
+        )
+        .order_by(ApprovalNode.id)
+    )
+
+
+def _is_overdue(node: ApprovalNode | None, now: datetime) -> bool:
+    if node is None or node.timeout_hours <= 0:
+        return False
+    created_at = _as_utc(node.created_at)
+    return created_at is not None and now - created_at > timedelta(hours=node.timeout_hours)
+
+
+def _monitor_item(
+    db: Session,
+    request: ApprovalRequest,
+    process_apps: dict[int, ProcessApp],
+    versions: dict[int, ProcessVersion],
+    users: dict[str, ApprovalUser],
+    now: datetime,
+) -> dict:
+    node = _current_monitor_node(db, request)
+    process_app = process_apps.get(request.process_app_id)
+    version = versions.get(request.process_version_id)
+    applicant = users.get(request.applicant_id)
+    applicant_snapshot = request.applicant_snapshot or {}
+    flow_node = next(
+        (
+            item
+            for item in request.flow_snapshot
+            if item.get("index") == request.current_node_index
+            or item.get("id") == (node.node_key if node else None)
+        ),
+        {},
+    )
+    approver = users.get(node.approver_id) if node else None
+    overdue = _is_overdue(node, now)
+    return {
+        "id": request.id,
+        "title": request.title,
+        "status": request.status,
+        "submitted_at": request.submitted_at.isoformat() if request.submitted_at else None,
+        "created_at": request.created_at.isoformat(),
+        "process_app": {
+            "id": process_app.id if process_app else request.process_app_id,
+            "code": process_app.code if process_app else None,
+            "name": process_app.name if process_app else None,
+            "version_id": version.id if version else request.process_version_id,
+            "version_number": version.version_number if version else None,
+        },
+        "applicant": {
+            "id": request.applicant_id,
+            "name": request.applicant_name,
+            "email": applicant.email if applicant else None,
+            "department": applicant_snapshot.get("department")
+            or (applicant.department if applicant else None),
+            "position": applicant_snapshot.get("position")
+            or (applicant.position if applicant else None),
+        },
+        "current_node": {
+            "id": node.id if node else None,
+            "node_index": request.current_node_index,
+            "node_key": node.node_key if node else flow_node.get("id"),
+            "name": flow_node.get("name") or flow_node.get("label"),
+            "status": node.status if node else None,
+            "timeout_hours": node.timeout_hours if node else 0,
+            "created_at": node.created_at.isoformat() if node else None,
+        },
+        "current_approver": {
+            "id": node.approver_id,
+            "name": node.approver_name,
+            "email": approver.email if approver else None,
+            "department": approver.department if approver else None,
+            "position": approver.position if approver else None,
+        }
+        if node
+        else None,
+        "overdue": overdue,
+    }
+
+
+def _monitor_context(db: Session, requests: list[ApprovalRequest]) -> tuple[dict, dict, dict]:
+    process_ids = {
+        request.process_app_id for request in requests if request.process_app_id is not None
+    }
+    version_ids = {
+        request.process_version_id for request in requests if request.process_version_id is not None
+    }
+    user_ids = {request.applicant_id for request in requests}
+    user_ids.update(
+        node.approver_id
+        for request in requests
+        for node in db.scalars(
+            select(ApprovalNode).where(ApprovalNode.request_id == request.id)
+        ).all()
+    )
+    return (
+        {
+            item.id: item
+            for item in db.scalars(
+                select(ProcessApp).where(ProcessApp.id.in_(process_ids))
+            ).all()
+        },
+        {
+            item.id: item
+            for item in db.scalars(
+                select(ProcessVersion).where(ProcessVersion.id.in_(version_ids))
+            ).all()
+        },
+        {
+            item.id: item
+            for item in db.scalars(select(ApprovalUser).where(ApprovalUser.id.in_(user_ids))).all()
+        },
+    )
+
+
+def _monitor_requests(
+    db: Session,
+    process_app_id: int | None,
+    request_status: MonitorStatus | None,
+    submitted_from: datetime | None,
+    submitted_to: datetime | None,
+    department: str | None,
+    applicant: str | None,
+    current_approver_id: str | None,
+    overdue: bool | None,
+) -> list[ApprovalRequest]:
+    statement = select(ApprovalRequest).order_by(
+        ApprovalRequest.submitted_at.desc(), ApprovalRequest.id.desc()
+    )
+    if process_app_id is not None:
+        statement = statement.where(ApprovalRequest.process_app_id == process_app_id)
+    if request_status is not None:
+        statement = statement.where(ApprovalRequest.status == request_status)
+    if submitted_from is not None:
+        statement = statement.where(ApprovalRequest.submitted_at >= submitted_from)
+    if submitted_to is not None:
+        statement = statement.where(ApprovalRequest.submitted_at <= submitted_to)
+    requests = db.scalars(statement).all()
+    now = datetime.now(UTC)
+    filtered = []
+    for request in requests:
+        snapshot = request.applicant_snapshot or {}
+        node = _current_monitor_node(db, request)
+        if department and department not in (snapshot.get("department") or ""):
+            continue
+        if applicant and applicant not in request.applicant_name:
+            continue
+        if current_approver_id and (node is None or node.approver_id != current_approver_id):
+            continue
+        if overdue is not None and _is_overdue(node, now) != overdue:
+            continue
+        filtered.append(request)
+    return filtered
+
+
+@admin_router.get("/process-monitor/summary")
+def process_monitor_summary(
+    _: User = Depends(require_permission("approval:manage")),
+    db: Session = Depends(get_approval_db),
+) -> dict:
+    requests = db.scalars(select(ApprovalRequest)).all()
+    now = datetime.now(UTC)
+    overdue = sum(_is_overdue(_current_monitor_node(db, request), now) for request in requests)
+    return {
+        "data": {
+            "total": len(requests),
+            "pending": sum(request.status == "pending" for request in requests),
+            "approved": sum(request.status == "approved" for request in requests),
+            "rejected": sum(request.status == "rejected" for request in requests),
+            "revoked": sum(request.status == "revoked" for request in requests),
+            "overdue": overdue,
+        }
+    }
+
+
+@admin_router.get("/process-monitor/requests")
+def process_monitor_requests(
+    process_app_id: int | None = Query(default=None, ge=1),
+    status: MonitorStatus | None = None,
+    submitted_from: datetime | None = None,
+    submitted_to: datetime | None = None,
+    department: str | None = None,
+    applicant: str | None = None,
+    current_approver_id: str | None = None,
+    overdue: bool | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    _: User = Depends(require_permission("approval:manage")),
+    db: Session = Depends(get_approval_db),
+) -> dict:
+    requests = _monitor_requests(
+        db,
+        process_app_id,
+        status,
+        submitted_from,
+        submitted_to,
+        department,
+        applicant,
+        current_approver_id,
+        overdue,
+    )
+    start = (page - 1) * page_size
+    selected = requests[start : start + page_size]
+    process_apps, versions, users = _monitor_context(db, selected)
+    now = datetime.now(UTC)
+    return {
+        "data": {
+            "items": [
+                _monitor_item(db, request, process_apps, versions, users, now)
+                for request in selected
+            ],
+            "total": len(requests),
+            "page": page,
+            "page_size": page_size,
+        }
+    }
 
 
 @admin_router.get("/process-apps")

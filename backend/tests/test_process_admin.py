@@ -1,4 +1,5 @@
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -6,7 +7,13 @@ from sqlalchemy import inspect, select
 from sqlalchemy.exc import IntegrityError
 
 from app.approval.database import ApprovalSessionLocal, approval_engine, get_approval_db
-from app.approval.models import ApprovalRequest, ApprovalUser, ProcessApp, ProcessVersion
+from app.approval.models import (
+    ApprovalNode,
+    ApprovalRequest,
+    ApprovalUser,
+    ProcessApp,
+    ProcessVersion,
+)
 from app.main import app
 
 
@@ -460,3 +467,131 @@ def test_user_create_and_update_require_position_and_reject_duplicate_email(clie
         f"/api/v1/admin/users/{user_id}", headers=admin_headers, json={"is_active": False}
     )
     assert missing_position_on_update.status_code == 422
+
+
+@pytest.fixture
+def overdue_request(db_session):
+    process_app = db_session.scalar(select(ProcessApp).where(ProcessApp.code == "expense"))
+    version = db_session.get(ProcessVersion, process_app.current_version_id)
+    applicant = db_session.scalar(
+        select(ApprovalUser).where(ApprovalUser.email == "product@demo.local")
+    )
+    approver = db_session.scalar(
+        select(ApprovalUser).where(ApprovalUser.email == "zhangsan@demo.local")
+    )
+    submitted_at = datetime.now(UTC) - timedelta(hours=5)
+    request = ApprovalRequest(
+        process_app_id=process_app.id,
+        process_version_id=version.id,
+        applicant_id=applicant.id,
+        applicant_name=applicant.display_name,
+        applicant_snapshot={
+            "display_name": applicant.display_name,
+            "department": applicant.department,
+            "position": applicant.position,
+        },
+        title="超时采购申请",
+        form_data={"amount": 1200},
+        form_schema_snapshot=version.form_schema,
+        status="pending",
+        current_node_index=0,
+        flow_snapshot=[{"index": 0, "id": "manager", "name": "部门审批"}],
+        submitted_at=submitted_at,
+        created_at=submitted_at,
+        updated_at=submitted_at,
+    )
+    db_session.add(request)
+    db_session.flush()
+    db_session.add_all(
+        [
+            ApprovalNode(
+                request_id=request.id,
+                node_index=0,
+                node_key="manager",
+                timeout_hours=2,
+                approver_id=approver.id,
+                approver_name=approver.display_name,
+                status="pending",
+                created_at=submitted_at,
+            ),
+            ApprovalNode(
+                request_id=request.id,
+                node_index=0,
+                node_key="manager",
+                timeout_hours=2,
+                approver_id=applicant.id,
+                approver_name=applicant.display_name,
+                status="pending",
+                created_at=submitted_at,
+            ),
+        ]
+    )
+    db_session.commit()
+    return request
+
+
+def test_monitor_filters_pending_requests_and_reports_overdue(
+    client, admin_headers, overdue_request
+):
+    summary = client.get("/api/v1/admin/process-monitor/summary", headers=admin_headers)
+    assert summary.status_code == 200
+    assert summary.json()["data"]["overdue"] == 1
+    rows = client.get(
+        "/api/v1/admin/process-monitor/requests?status=pending&overdue=true&page=1&page_size=20",
+        headers=admin_headers,
+    )
+    assert rows.status_code == 200
+    data = rows.json()["data"]
+    assert data["total"] == 1
+    assert data["page"] == 1
+    assert data["page_size"] == 20
+    assert len(data["items"]) == 1
+    item = data["items"][0]
+    assert item["process_app"]["code"] == "expense"
+    assert item["applicant"]["department"] == "产品与流程创新"
+    assert item["current_node"]["node_key"] == "manager"
+    assert item["current_approver"]["email"] == "zhangsan@demo.local"
+    assert item["overdue"] is True
+
+
+def test_monitor_requests_support_typed_filters_pagination_and_admin_read_only(
+    client, admin_headers, overdue_request
+):
+    response = client.get(
+        "/api/v1/admin/process-monitor/requests",
+        params={
+            "process_app_id": overdue_request.process_app_id,
+            "status": "pending",
+            "submitted_from": "2026-01-01T00:00:00Z",
+            "submitted_to": "2030-01-01T00:00:00Z",
+            "department": "产品",
+            "applicant": "产品",
+            "current_approver_id": "44444444-4444-4444-4444-444444444444",
+            "overdue": True,
+            "page": 1,
+            "page_size": 1,
+        },
+        headers=admin_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["total"] == 1
+    assert len(response.json()["data"]["items"]) == 1
+
+    for query in (
+        {"overdue": "not-a-bool"},
+        {"page": 0},
+        {"page_size": 101},
+        {"submitted_from": "not-a-date"},
+        {"status": "not-a-status"},
+    ):
+        assert client.get(
+            "/api/v1/admin/process-monitor/requests", params=query, headers=admin_headers
+        ).status_code == 422
+
+    anonymous = client.get("/api/v1/admin/process-monitor/summary")
+    assert anonymous.status_code == 401
+    employee_login = client.post("/api/v1/auth/demo-login", json={"role": "product_demo_user"})
+    employee_headers = {"Authorization": f"Bearer {employee_login.json()['data']['access_token']}"}
+    assert client.get(
+        "/api/v1/admin/process-monitor/requests", headers=employee_headers
+    ).status_code == 403
