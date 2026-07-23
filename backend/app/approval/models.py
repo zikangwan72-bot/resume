@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.approval.database import ApprovalBase
@@ -86,9 +86,16 @@ class ProcessVersion(ApprovalBase):
 
 class ApprovalRequest(ApprovalBase):
     __tablename__ = "approval_requests"
+    __table_args__ = (
+        UniqueConstraint(
+            "applicant_id",
+            "idempotency_key",
+            name="uq_approval_requests_applicant_idempotency",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    type_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    type_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     process_app_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     process_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     applicant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
