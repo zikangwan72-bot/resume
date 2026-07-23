@@ -223,6 +223,7 @@ git commit -m "feat: validate and resolve approval process graphs"
 **Files:**
 - Create: `backend/app/approval/admin_router.py`
 - Create: `backend/app/approval/serializers.py`
+- Modify: `backend/app/approval/router.py`
 - Modify: `backend/app/main.py`
 - Test: `backend/tests/test_process_admin.py`
 
@@ -258,7 +259,7 @@ Expected: FAIL because the new endpoints are missing.
 
 - [ ] **Step 3: Implement typed admin endpoints**
 
-Use `ProcessAppCreate`, `ProcessAppUpdate`, `ApprovalUserCreate`, and `ApprovalUserUpdate` Pydantic models. Publishing calls `validate_process_definition`; when errors exist, return HTTP 422 as:
+Use `ProcessAppCreate`, `ProcessAppUpdate`, `ApprovalUserCreate`, and `ApprovalUserUpdate` Pydantic models. Remove the legacy `/approval-types`, `/form-templates`, `/flow-templates`, `/users`, and `/logs` admin handlers from `router.py` in the same task before registering `admin_router.py`, so FastAPI never has duplicate `/api/v1/admin/users` routes. Publishing calls `validate_process_definition`; when errors exist, return HTTP 422 as:
 
 ```json
 {"detail":{"code":"definition_invalid","errors":[{"code":"missing_approver","message":"审批节点未选择审批人","target_id":"node-2"}]}}
@@ -275,7 +276,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add backend/app/approval/admin_router.py backend/app/approval/serializers.py backend/app/main.py backend/tests/test_process_admin.py
+git add backend/app/approval/admin_router.py backend/app/approval/serializers.py backend/app/approval/router.py backend/app/main.py backend/tests/test_process_admin.py
 git commit -m "feat: add process application administration APIs"
 ```
 
@@ -387,7 +388,6 @@ git commit -m "feat: add read-only approval process monitoring"
 - Modify: `frontend/src/App.vue`
 - Modify: `frontend/src/styles.css`
 - Modify: `frontend/src/layouts/AppLayout.vue`
-- Modify: `frontend/src/router/index.ts`
 - Modify: `frontend/src/views/DashboardView.vue`
 - Modify: `frontend/src/views/ModuleView.vue`
 - Modify: `frontend/src/views/LoginView.vue`
@@ -402,24 +402,22 @@ git commit -m "feat: add read-only approval process monitoring"
 - Test: `frontend/tests/e2e/foundation.spec.ts`
 
 **Interfaces:**
-- Produces: one global theme and consistent navigation for all modules.
-- Produces: admin entries “用户管理”, “流程应用”, and “流程监控”.
+- Produces: one global theme and consistent page surfaces for all modules.
+- Preserves existing admin routes until their replacement pages exist in Tasks 7, 8, and 12.
 
 - [ ] **Step 1: Add failing UI contract assertions**
 
 ```ts
 await expect(page.locator('.ant-layout-sider')).toHaveCSS('background-color', 'rgb(0, 21, 41)')
-await expect(page.getByText('用户管理', { exact: true })).toBeVisible()
-await expect(page.getByText('流程应用', { exact: true })).toBeVisible()
-await expect(page.getByText('流程监控', { exact: true })).toBeVisible()
-await expect(page.getByText('审批类型', { exact: true })).toHaveCount(0)
+await expect(page.locator('.ant-card').first()).toBeVisible()
+await expect(page.locator('.ant-btn-primary').first()).toHaveCSS('background-color', 'rgb(22, 119, 255)')
 ```
 
 - [ ] **Step 2: Run the E2E test and verify failures**
 
 Run: `cd frontend; npm.cmd run test:e2e -- foundation.spec.ts`
 
-Expected: FAIL because the old teal shell and five legacy admin entries remain.
+Expected: FAIL because the old teal shell and custom module cards remain.
 
 - [ ] **Step 3: Apply the global Ant theme**
 
@@ -444,7 +442,7 @@ const theme = {
 </template>
 ```
 
-Set sidebar to `#001529`, remove module-specific dominant accent styling, and standardize page width, typography, spacing, loading, empty, and error states. Convert dashboard, generic module, login, notification, AI run, audit, profile, approval home, request list, pending, and handled surfaces to Ant `a-card`, `a-statistic`, `a-table`, `a-list`, `a-tag`, `a-alert`, `a-empty`, `a-skeleton`, and `a-space` components. Update navigation and routes to the three new admin pages. Do not place cards inside cards.
+Set sidebar to `#001529`, remove module-specific dominant accent styling, and standardize page width, typography, spacing, loading, empty, and error states. Convert dashboard, generic module, login, notification, AI run, audit, profile, approval home, request list, pending, and handled surfaces to Ant `a-card`, `a-statistic`, `a-table`, `a-list`, `a-tag`, `a-alert`, `a-empty`, `a-skeleton`, and `a-space` components. Keep the existing admin route targets until their replacement pages are created. Do not place cards inside cards.
 
 - [ ] **Step 4: Run typecheck and foundation E2E**
 
@@ -455,7 +453,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add frontend/src/App.vue frontend/src/styles.css frontend/src/layouts/AppLayout.vue frontend/src/router/index.ts frontend/src/views/DashboardView.vue frontend/src/views/ModuleView.vue frontend/src/views/LoginView.vue frontend/src/views/NotificationsView.vue frontend/src/views/AIRunsView.vue frontend/src/views/AuditLogsView.vue frontend/src/views/ProfileView.vue frontend/src/views/approval/ApprovalHome.vue frontend/src/views/approval/ApprovalMyRequests.vue frontend/src/views/approval/ApprovalPending.vue frontend/src/views/approval/ApprovalHandled.vue frontend/tests/e2e/foundation.spec.ts
+git add frontend/src/App.vue frontend/src/styles.css frontend/src/layouts/AppLayout.vue frontend/src/views/DashboardView.vue frontend/src/views/ModuleView.vue frontend/src/views/LoginView.vue frontend/src/views/NotificationsView.vue frontend/src/views/AIRunsView.vue frontend/src/views/AuditLogsView.vue frontend/src/views/ProfileView.vue frontend/src/views/approval/ApprovalHome.vue frontend/src/views/approval/ApprovalMyRequests.vue frontend/src/views/approval/ApprovalPending.vue frontend/src/views/approval/ApprovalHandled.vue frontend/tests/e2e/foundation.spec.ts
 git commit -m "style: unify suite with Ant Design Vue"
 ```
 
@@ -465,6 +463,8 @@ git commit -m "style: unify suite with Ant Design Vue"
 - Create: `frontend/src/types/approval.ts`
 - Modify: `frontend/src/types.ts`
 - Create: `frontend/src/views/approval/AdminUsers.vue`
+- Modify: `frontend/src/router/index.ts`
+- Modify: `frontend/src/layouts/AppLayout.vue`
 
 **Interfaces:**
 - Produces: `ApprovalUser`, `ProcessApp`, `ProcessVersion`, `FormSchema`, `FlowSchema`, `ApprovalRequestDetail`, and monitor types.
@@ -487,7 +487,7 @@ Expected: FAIL because `/admin/users` and the page do not exist.
 
 - [ ] **Step 3: Implement contracts and Ant user page**
 
-Use `a-card`, `a-table`, `a-form`, `a-input`, `a-select`, `a-switch`, `a-modal`, `a-tag`, and `a-popconfirm`. The form model is:
+Use `a-card`, `a-table`, `a-form`, `a-input`, `a-select`, `a-switch`, `a-modal`, `a-tag`, and `a-popconfirm`. Replace the old role-management route/menu entry with `/admin/users` only after `AdminUsers.vue` exists. The form model is:
 
 ```ts
 type UserForm = {
@@ -511,7 +511,7 @@ Expected: user scenario PASS.
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add frontend/src/types/approval.ts frontend/src/types.ts frontend/src/views/approval/AdminUsers.vue frontend/tests/e2e/process-app.spec.ts
+git add frontend/src/types/approval.ts frontend/src/types.ts frontend/src/views/approval/AdminUsers.vue frontend/src/router/index.ts frontend/src/layouts/AppLayout.vue frontend/tests/e2e/process-app.spec.ts
 git commit -m "feat: add approval user administration"
 ```
 
@@ -520,6 +520,8 @@ git commit -m "feat: add approval user administration"
 **Files:**
 - Create: `frontend/src/components/approval/ProcessStatusTag.vue`
 - Create: `frontend/src/views/approval/AdminProcessApps.vue`
+- Modify: `frontend/src/router/index.ts`
+- Modify: `frontend/src/layouts/AppLayout.vue`
 - Test: `frontend/tests/e2e/process-app.spec.ts`
 
 **Interfaces:**
@@ -544,7 +546,7 @@ Expected: FAIL because the page is absent.
 
 - [ ] **Step 3: Implement the Ant list page**
 
-Use an un-nested `a-card` containing filters and `a-table`. Columns are name/category, field count, approval node count, current version, status, and updated time. Actions use `a-dropdown` for preview, edit, copy, and deactivate. Use `a-empty` when no rows exist.
+Use an un-nested `a-card` containing filters and `a-table`. Columns are name/category, field count, approval node count, current version, status, and updated time. Actions use `a-dropdown` for preview, edit, copy, and deactivate. Use `a-empty` when no rows exist. Add `/admin/process-apps` only after the page exists, then remove the three legacy template menu entries while their files remain available until final cleanup.
 
 - [ ] **Step 4: Run typecheck and list E2E**
 
@@ -555,7 +557,7 @@ Expected: list scenario PASS.
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add frontend/src/components/approval/ProcessStatusTag.vue frontend/src/views/approval/AdminProcessApps.vue frontend/tests/e2e/process-app.spec.ts
+git add frontend/src/components/approval/ProcessStatusTag.vue frontend/src/views/approval/AdminProcessApps.vue frontend/src/router/index.ts frontend/src/layouts/AppLayout.vue frontend/tests/e2e/process-app.spec.ts
 git commit -m "feat: add process application administration page"
 ```
 
@@ -564,6 +566,7 @@ git commit -m "feat: add process application administration page"
 **Files:**
 - Create: `frontend/src/components/approval/FormSchemaDesigner.vue`
 - Create: `frontend/src/views/approval/AdminProcessEditor.vue`
+- Modify: `frontend/src/router/index.ts`
 - Test: `frontend/tests/e2e/process-app.spec.ts`
 
 **Interfaces:**
@@ -590,7 +593,7 @@ Expected: FAIL because the editor and designer are absent.
 
 - [ ] **Step 3: Implement the three-column designer**
 
-Use Ant `a-steps` for the four editor stages, `a-card`/`a-list` for the component palette, `a-form` for properties, and icon buttons with tooltips for duplicate/delete/move. Generate stable IDs with `crypto.randomUUID()`. Always render a locked applicant information section. Support text, textarea, number, money, date, date range, radio, checkbox, select, user, department, attachment, section, and detail table; detail columns are text, number, money, date, or select.
+Use Ant `a-steps` for the four editor stages, `a-card`/`a-list` for the component palette, `a-form` for properties, and icon buttons with tooltips for duplicate/delete/move. Generate stable IDs with `crypto.randomUUID()`. Always render a locked applicant information section. Support text, textarea, number, money, date, date range, radio, checkbox, select, user, department, attachment, section, and detail table; detail columns are text, number, money, date, or select. Add the new/edit editor routes only after `AdminProcessEditor.vue` exists.
 
 - [ ] **Step 4: Run typecheck and designer E2E**
 
@@ -601,7 +604,7 @@ Expected: form-designer scenario PASS.
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add frontend/src/components/approval/FormSchemaDesigner.vue frontend/src/views/approval/AdminProcessEditor.vue frontend/tests/e2e/process-app.spec.ts
+git add frontend/src/components/approval/FormSchemaDesigner.vue frontend/src/views/approval/AdminProcessEditor.vue frontend/src/router/index.ts frontend/tests/e2e/process-app.spec.ts
 git commit -m "feat: add low-code approval form designer"
 ```
 
