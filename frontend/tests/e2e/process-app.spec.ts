@@ -479,3 +479,44 @@ test('blocks duplicate or blank choice options and keeps mobile properties reach
   const layout = await page.evaluate(() => ({ viewport: window.innerWidth, scrollWidth: document.documentElement.scrollWidth }))
   expect(layout.scrollWidth).toBeLessThanOrEqual(layout.viewport)
 })
+
+test('normalizes legacy editor data and persists a successful PUT reload roundtrip', async ({ page }) => {
+  const app: any = {
+    ...seededProcessApps[0],
+    name: '旧版流程', code: 'legacy-flow', category: '财务', description: '旧版说明',
+    form_schema: {
+      fields: [
+        { id: 'legacy_text', key: 'legacy_text', type: 'text', label: null, placeholder: { legacy: true }, help: null, options: null, required: false },
+        { id: 'legacy_items', key: 'legacy_items', type: 'detail_table', label: undefined, required: true, columns: [{ id: 'kind', key: 'kind', label: null, type: 'select', required: true, options: ['server'] }] },
+      ],
+    },
+  }
+  let putPayload: any
+  await page.route('**/api/v1/admin/process-apps/1', async (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: app }) })
+    if (route.request().method() === 'PUT') {
+      putPayload = route.request().postDataJSON()
+      Object.assign(app, putPayload)
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: app }) })
+    }
+    return route.continue()
+  })
+  await loginAsAdmin(page)
+  await page.goto('/admin/process-apps/1/edit')
+  await expect(page.getByLabel('流程名称')).toHaveValue('旧版流程')
+  await page.getByRole('button', { name: '下一步' }).click()
+  await expect(page.getByText('legacy_text', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '选择字段 legacy_items' }).click()
+  await expect(page.getByLabel('明细列名称')).toHaveValue('kind')
+  await page.getByRole('button', { name: '保存草稿' }).click()
+  await expect.poll(() => putPayload).toBeTruthy()
+  expect(putPayload).toMatchObject({ name: '旧版流程', code: 'legacy-flow', category: '财务', description: '旧版说明' })
+  expect(putPayload.form_schema.fields[0]).toMatchObject({ id: 'legacy_text', key: 'legacy_text', label: 'legacy_text', placeholder: { legacy: true }, help: null, options: null })
+  expect(putPayload.form_schema.fields[1].columns[0]).toMatchObject({ id: 'kind', key: 'kind', label: 'kind', type: 'select', options: ['server'] })
+  await page.reload()
+  await expect(page.getByLabel('流程名称')).toHaveValue('旧版流程')
+  await page.getByRole('button', { name: '下一步' }).click()
+  await expect(page.getByText('legacy_text', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '选择字段 legacy_items' }).click()
+  await expect(page.getByLabel('明细列名称')).toHaveValue('kind')
+})

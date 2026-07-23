@@ -32,3 +32,9 @@
 
 - 2026-07-24: backend focused tests passed (106), Ruff passed, frontend typecheck passed, and isolated process-app E2E passed (14).
 - No visual assertion failed. The focused E2E captures selected detail-column desktop and mobile screenshots for review.
+
+## Legacy Normalization Follow-up
+
+- Recursive edit normalization now accepts missing/non-string labels, placeholders, help text, and options without calling string methods on non-strings. It preserves valid legacy values and derives display labels from stable IDs, keys, or field types.
+- Added a successful PUT then GET reload E2E roundtrip covering legacy missing labels, basic metadata, stable IDs, and detail select options.
+- 2026-07-24: frontend typecheck passed and isolated process-app E2E passed (15).

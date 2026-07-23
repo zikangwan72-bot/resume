@@ -13,22 +13,43 @@ const isEdit = computed(() => typeof route.params.id === 'string')
 const formRules = { name: [{ required: true, whitespace: true, message: '请输入流程名称', trigger: 'blur' }], code: [{ required: true, whitespace: true, message: '请输入流程编号', trigger: 'blur' }, { pattern: /^[A-Za-z][A-Za-z0-9_-]*$/, message: '编号须以字母开头，只能使用字母、数字、下划线或连字符', trigger: 'blur' }], category: [{ required: true, message: '请选择流程分类', trigger: 'change' }] }
 const snapshot = () => JSON.stringify(draft)
 const dirty = computed(() => loaded.value && snapshot() !== baseline.value)
-function normalizedOptions(options?: string[]) { return options?.map((option) => option.trim()) }
-function normalizeFields(fields: ProcessAppDraft['form_schema']['fields']) {
+function nonemptyString(value: unknown) { return typeof value === 'string' && value.trim() ? value.trim() : undefined }
+function normalizeOptionalText(value: unknown) { return typeof value === 'string' ? value.trim() : value }
+function normalizedOptions(options: unknown) { return Array.isArray(options) ? options.map((option) => typeof option === 'string' ? option.trim() : option) : options }
+function normalizeFields(fields: unknown): ProcessAppDraft['form_schema']['fields'] {
   const fieldIds = new Set<string>()
-  return fields.map((field) => {
-    let id = field.id || field.key
+  const legacyFields = Array.isArray(fields) ? fields as Array<Record<string, unknown>> : []
+  return legacyFields.map((field) => {
+    let id = nonemptyString(field.id) ?? nonemptyString(field.key)
     if (!id || fieldIds.has(id)) id = crypto.randomUUID()
     fieldIds.add(id)
     const columnIds = new Set<string>()
-    const columns = field.columns?.map((column) => {
-      let columnId = column.id || column.key
+    const legacyColumns = Array.isArray(field.columns) ? field.columns as Array<Record<string, unknown>> : undefined
+    const columns = legacyColumns?.map((column) => {
+      let columnId = nonemptyString(column.id) ?? nonemptyString(column.key)
       if (!columnId || columnIds.has(columnId)) columnId = crypto.randomUUID()
       columnIds.add(columnId)
-      return { ...column, id: columnId, key: columnId, label: column.label.trim(), options: normalizedOptions(column.options) }
+      return {
+        ...column,
+        id: columnId,
+        key: columnId,
+        label: nonemptyString(column.label) ?? columnId ?? String(column.type ?? '明细列'),
+        placeholder: normalizeOptionalText(column.placeholder),
+        help: normalizeOptionalText(column.help),
+        options: normalizedOptions(column.options),
+      }
     })
-    return { ...field, id, key: id, label: field.label.trim(), options: normalizedOptions(field.options), columns }
-  })
+    return {
+      ...field,
+      id,
+      key: id,
+      label: nonemptyString(field.label) ?? id ?? String(field.type ?? '字段'),
+      placeholder: normalizeOptionalText(field.placeholder),
+      help: normalizeOptionalText(field.help),
+      options: normalizedOptions(field.options),
+      columns,
+    }
+  }) as ProcessAppDraft['form_schema']['fields']
 }
 function apply(app: ProcessApp) {
   const fields = normalizeFields(app.form_schema?.fields ?? [])
