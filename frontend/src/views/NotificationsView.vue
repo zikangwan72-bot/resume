@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { BellOutlined } from '@ant-design/icons-vue'
+import { message } from 'ant-design-vue'
 
 import api from '@/api/client'
 
@@ -20,8 +21,12 @@ async function load() {
 
 async function markRead(item: NotificationItem) {
   if (item.read_at) return
-  await api.patch(`/api/v1/notifications/${item.id}/read`)
-  await load()
+  try {
+    await api.patch(`/api/v1/notifications/${item.id}/read`)
+    await load()
+  } catch {
+    message.error('标记通知已读失败')
+  }
 }
 
 onMounted(load)
@@ -33,7 +38,7 @@ onMounted(load)
     <a-spin :spinning="loading">
       <a-alert v-if="failed" type="error" show-icon message="通知加载失败"><template #action><a-button size="small" @click="load">重试</a-button></template></a-alert>
       <a-list v-else-if="items.length" class="record-list" item-layout="horizontal" :data-source="items">
-        <template #renderItem="{ item }"><a-list-item class="record-row" :class="{ unread: !item.read_at }" @click="markRead(item)"><a-list-item-meta :description="item.content"><template #title>{{ item.title }}</template><template #avatar><BellOutlined class="record-icon" /></template></a-list-item-meta><span class="record-meta">{{ item.read_at ? '已读' : '标记已读' }}</span></a-list-item></template>
+        <template #renderItem="{ item }"><a-list-item><a-button type="link" class="record-row" :class="{ unread: !item.read_at }" @click="markRead(item)"><BellOutlined class="record-icon" /><span class="record-content"><strong>{{ item.title }}</strong><small>{{ item.content }}</small></span><span class="record-meta">{{ item.read_at ? '已读' : '标记已读' }}</span></a-button></a-list-item></template>
       </a-list>
       <a-empty v-else description="暂无通知" />
     </a-spin>

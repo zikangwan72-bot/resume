@@ -8,16 +8,21 @@ import PageBackButton from '@/components/PageBackButton.vue'
 const router = useRouter()
 const items = ref<any[]>([])
 const loading = ref(true)
+const failed = ref(false)
 
 const statusTagMap: Record<string, string> = { approved: 'success', rejected: 'error' }
 const statusTextMap: Record<string, string> = { approved: '已通过', rejected: '已驳回' }
 
-onMounted(async () => {
+async function load() {
+  loading.value = true
+  failed.value = false
   try {
     const res = await api.get('/api/v1/approvals/handled')
     items.value = res.data.data
-  } finally { loading.value = false }
-})
+  } catch { failed.value = true } finally { loading.value = false }
+}
+
+onMounted(load)
 </script>
 
 <template>
@@ -32,7 +37,8 @@ onMounted(async () => {
     </header>
 
     <a-skeleton v-if="loading" active :paragraph="{ rows: 6 }" />
+    <a-alert v-else-if="failed" type="error" show-icon message="已审批记录加载失败"><template #action><a-button size="small" @click="load">重试</a-button></template></a-alert>
     <a-empty v-else-if="items.length === 0" description="暂无已审批记录" />
-    <a-list v-else class="record-list" :data-source="items"><template #renderItem="{ item }"><a-list-item class="request-card" @click="router.push(`/modules/approval-center/${item.request.id}`)"><a-list-item-meta :title="item.request.title" :description="`${item.request.applicant_name} · ${item.acted_at?.slice(0, 10) || ''}`" /><a-tag :color="statusTagMap[item.node_status]">{{ statusTextMap[item.node_status] || item.node_status }}</a-tag></a-list-item></template></a-list>
+    <a-list v-else class="record-list" :data-source="items"><template #renderItem="{ item }"><a-list-item><a-button type="link" class="request-card" @click="router.push(`/modules/approval-center/${item.request.id}`)"><span class="request-info"><strong>{{ item.request.title }}</strong><small>{{ item.request.applicant_name }} · {{ item.acted_at?.slice(0, 10) || '' }}</small></span><a-tag :color="statusTagMap[item.node_status]">{{ statusTextMap[item.node_status] || item.node_status }}</a-tag></a-button></a-list-item></template></a-list>
   </div>
 </template>

@@ -27,6 +27,7 @@ onMounted(load)
       <template #bodyCell="{ column, record }">
         <a-tag v-if="column.dataIndex === 'status'">{{ record.status }}</a-tag>
         <span v-else-if="column.dataIndex === 'human_review'">{{ record.human_review ? '需要' : '不需要' }}</span>
+        <span v-else>{{ record[column.dataIndex] }}</span>
       </template>
     </a-table>
   </div>

@@ -12,9 +12,11 @@ const pendingCount = ref(0)
 const handledCount = ref(0)
 const pendingList = ref<PendingItem[]>([])
 const loading = ref(true)
+const failed = ref(false)
 
 async function load() {
   loading.value = true
+  failed.value = false
   try {
     const [pendingRes, handledRes] = await Promise.all([
       api.get('/api/v1/approvals/pending'),
@@ -23,7 +25,7 @@ async function load() {
     pendingList.value = (pendingRes.data.data as PendingItem[]).slice(0, 5)
     pendingCount.value = pendingRes.data.data.length
     handledCount.value = handledRes.data.data.length
-  } catch { /* ignore */ }
+  } catch { failed.value = true }
   finally { loading.value = false }
 }
 
@@ -47,7 +49,7 @@ onMounted(load)
     </div>
 
     <!-- 快捷操作 -->
-    <div class="quick-actions">
+    <a-space class="quick-actions" wrap>
       <a-button type="primary" size="large" @click="router.push('/modules/approval-center/new')">
         <PlusOutlined /> 发起申请
       </a-button>
@@ -57,14 +59,15 @@ onMounted(load)
       <a-button size="large" @click="router.push('/modules/approval-center/pending')">
         <SendOutlined /> 待我审批
       </a-button>
-    </div>
+    </a-space>
 
     <!-- 待审批列表 -->
     <div class="section-title" style="margin-top:28px;">
       <div><p class="eyebrow">PENDING</p><h2>待我审批</h2></div>
     </div>
     <a-skeleton v-if="loading" active :paragraph="{ rows: 4 }" />
+    <a-alert v-else-if="failed" type="error" show-icon message="审批中心加载失败"><template #action><a-button size="small" @click="load">重试</a-button></template></a-alert>
     <a-empty v-else-if="pendingList.length === 0" description="暂无待审批项" />
-    <a-list v-else class="record-list" :data-source="pendingList"><template #renderItem="{ item }"><a-list-item class="pending-card" @click="router.push(`/modules/approval-center/${item.request.id}`)"><a-list-item-meta :title="item.request.title" :description="`${item.request.applicant_name} · ${item.request.created_at.slice(0, 10)}`" /><a-tag color="processing">待处理</a-tag></a-list-item></template></a-list>
+    <a-list v-else class="record-list" :data-source="pendingList"><template #renderItem="{ item }"><a-list-item><a-button type="link" class="pending-card" @click="router.push(`/modules/approval-center/${item.request.id}`)"><span class="pending-info"><strong>{{ item.request.title }}</strong><small>{{ item.request.applicant_name }} · {{ item.request.created_at.slice(0, 10) }}</small></span><a-tag color="processing">待处理</a-tag></a-button></a-list-item></template></a-list>
   </div>
 </template>

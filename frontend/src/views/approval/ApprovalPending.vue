@@ -11,13 +11,18 @@ import type { PendingItem } from '@/types'
 const router = useRouter()
 const items = ref<PendingItem[]>([])
 const loading = ref(true)
+const failed = ref(false)
 
-onMounted(async () => {
+async function load() {
+  loading.value = true
+  failed.value = false
   try {
     const res = await api.get('/api/v1/approvals/pending')
     items.value = res.data.data
-  } finally { loading.value = false }
-})
+  } catch { failed.value = true } finally { loading.value = false }
+}
+
+onMounted(load)
 
 async function quickApprove(item: PendingItem) {
   try {
@@ -48,9 +53,10 @@ async function quickReject(item: PendingItem) {
     </header>
 
     <a-skeleton v-if="loading" active :paragraph="{ rows: 6 }" />
+    <a-alert v-else-if="failed" type="error" show-icon message="待审批列表加载失败"><template #action><a-button size="small" @click="load">重试</a-button></template></a-alert>
     <a-empty v-else-if="items.length === 0" description="没有待审批项" />
     <a-list v-else class="record-list" :data-source="items"><template #renderItem="{ item }"><a-list-item class="pending-card-full">
-        <a-list-item-meta class="pending-main" :title="item.request.title" :description="`${item.request.applicant_name} · ${item.request.created_at.slice(0, 10)}`" @click="router.push(`/modules/approval-center/${item.request.id}`)" />
+        <a-button type="link" class="pending-main" @click="router.push(`/modules/approval-center/${item.request.id}`)"><strong>{{ item.request.title }}</strong><small>{{ item.request.applicant_name }} · {{ item.request.created_at.slice(0, 10) }}</small></a-button>
         <div class="pending-actions">
           <a-button size="small" type="primary" @click="quickApprove(item)"><CheckCircleOutlined /> 同意</a-button>
           <a-button size="small" danger @click="quickReject(item)"><CloseCircleOutlined /> 驳回</a-button>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import axios from 'axios'
 import { CheckOutlined, ClockCircleOutlined, SafetyCertificateOutlined } from '@ant-design/icons-vue'
 
 import api from '@/api/client'
@@ -10,6 +11,8 @@ const route = useRoute()
 const module = ref<ModuleSummary | null>(null)
 const loading = ref(true)
 const failed = ref(false)
+const errorStatus = ref<number | null>(null)
+const errorMessage = ref('')
 
 const businessFlows: Record<string, string[]> = {
   'resume-screening': ['创建岗位', '接收简历', '候选人初筛', '人工复核'],
@@ -21,11 +24,19 @@ const businessFlows: Record<string, string[]> = {
 async function load() {
   loading.value = true
   failed.value = false
+  errorStatus.value = null
+  errorMessage.value = ''
   try {
     const response = await api.get(`/api/v1/modules/${route.params.moduleKey}/summary`)
     module.value = response.data.data
-  } catch {
+  } catch (error) {
     failed.value = true
+    if (axios.isAxiosError(error)) {
+      errorStatus.value = error.response?.status ?? null
+      errorMessage.value = error.response?.data?.message || error.message
+    } else {
+      errorMessage.value = '网络连接异常，请稍后重试。'
+    }
   } finally {
     loading.value = false
   }
@@ -33,12 +44,22 @@ async function load() {
 
 onMounted(load)
 watch(() => route.params.moduleKey, load)
+
+const errorTitle = () => {
+  if (errorStatus.value === 403) return '无权访问该模块'
+  if (errorStatus.value === 404) return '未找到该模块'
+  return '模块加载失败'
+}
+
+const canRetry = () => errorStatus.value === null || errorStatus.value >= 500
 </script>
 
 <template>
   <div class="page-frame module-page">
     <a-skeleton v-if="loading" active :paragraph="{ rows: 10 }" />
-    <a-result v-else-if="failed" status="403" title="无法访问该模块" sub-title="请检查角色权限或后端服务。" />
+    <a-result v-else-if="failed" :status="errorStatus === 403 ? '403' : errorStatus === 404 ? '404' : 'error'" :title="errorTitle()" :sub-title="errorMessage || '请稍后重试。'">
+      <template v-if="canRetry()" #extra><a-button type="primary" @click="load">重试</a-button></template>
+    </a-result>
     <template v-else-if="module">
       <header class="page-heading">
         <div>
