@@ -96,7 +96,9 @@ function apiErrorMessage(error: unknown): string {
 
 function apiFieldErrors(error: unknown): FieldError[] {
   if (!isRecord(error) || !isRecord(error.response) || !isRecord(error.response.data)) return []
-  const detail = (error.response.data as ApiErrorPayload).detail
+  const payload = error.response.data as ApiErrorPayload
+  if (error.response.status === 409 && payload.detail === '邮箱已存在') return [{ field: 'email', message: '邮箱已存在' }]
+  const detail = payload.detail
   if (!Array.isArray(detail)) return []
   return detail.flatMap((item): FieldError[] => {
     if (!isRecord(item) || !Array.isArray(item.loc) || typeof item.msg !== 'string') return []
@@ -172,29 +174,31 @@ onMounted(loadUsers)
     </a-alert>
 
     <a-card v-else :bordered="false" class="users-panel">
-      <div class="users-toolbar">
-        <a-input v-model:value="search" allow-clear placeholder="搜索姓名、邮箱、部门或职位" aria-label="搜索员工"><template #prefix><SearchOutlined /></template></a-input>
-        <a-segmented v-model:value="activeFilter" :options="[{ label: '全部', value: 'all' }, { label: '启用中', value: 'active' }, { label: '已停用', value: 'inactive' }]" aria-label="员工状态筛选" />
-      </div>
-      <a-table v-if="!loading" :data-source="filteredUsers" row-key="id" :pagination="false" :scroll="{ x: 760 }">
-        <a-table-column title="姓名" data-index="display_name" :width="140" />
-        <a-table-column title="邮箱" data-index="email" :width="220" />
-        <a-table-column title="部门" data-index="department" :width="160" />
-        <a-table-column title="职位" data-index="position" :width="140" />
-        <a-table-column title="角色" :width="130"><template #default="{ record }"><a-tag>{{ roleLabel(record.role) }}</a-tag></template></a-table-column>
-        <a-table-column title="状态" :width="100"><template #default="{ record }"><a-tag :color="record.is_active ? 'success' : 'default'">{{ record.is_active ? '启用' : '停用' }}</a-tag></template></a-table-column>
-        <a-table-column title="操作" fixed="right" :width="150"><template #default="{ record }">
-          <a-space>
-            <a-button type="link" size="small" @click="openEdit(record)">编辑</a-button>
-            <a-popconfirm v-if="record.is_active" title="停用这名员工？" ok-text="停用" cancel-text="取消" @confirm="setActive(record, false)">
-              <a-switch :checked="record.is_active" size="small" aria-label="停用员工" @click.prevent />
-            </a-popconfirm>
-            <a-switch v-else :checked="record.is_active" size="small" aria-label="启用员工" @change="toggleActive(record, $event)" />
-          </a-space>
-        </template></a-table-column>
-      </a-table>
-      <a-skeleton v-else active :paragraph="{ rows: 6 }" />
-      <a-empty v-if="!loading && filteredUsers.length === 0" description="暂无匹配员工" />
+      <a-skeleton v-if="loading" active :paragraph="{ rows: 6 }" />
+      <template v-else>
+        <div class="users-toolbar">
+          <a-input v-model:value="search" allow-clear placeholder="搜索姓名、邮箱、部门或职位" aria-label="搜索员工"><template #prefix><SearchOutlined /></template></a-input>
+          <a-segmented v-model:value="activeFilter" :options="[{ label: '全部', value: 'all' }, { label: '启用中', value: 'active' }, { label: '已停用', value: 'inactive' }]" aria-label="员工状态筛选" />
+        </div>
+        <a-empty v-if="filteredUsers.length === 0" description="暂无匹配员工" />
+        <a-table v-else :data-source="filteredUsers" row-key="id" :pagination="false" :scroll="{ x: 760 }">
+          <a-table-column title="姓名" data-index="display_name" :width="140" />
+          <a-table-column title="邮箱" data-index="email" :width="220" />
+          <a-table-column title="部门" data-index="department" :width="160" />
+          <a-table-column title="职位" data-index="position" :width="140" />
+          <a-table-column title="角色" :width="130"><template #default="{ record }"><a-tag>{{ roleLabel(record.role) }}</a-tag></template></a-table-column>
+          <a-table-column title="状态" :width="100"><template #default="{ record }"><a-tag :color="record.is_active ? 'success' : 'default'">{{ record.is_active ? '启用' : '停用' }}</a-tag></template></a-table-column>
+          <a-table-column title="操作" fixed="right" :width="150"><template #default="{ record }">
+            <a-space>
+              <a-button type="link" size="small" @click="openEdit(record)">编辑</a-button>
+              <a-popconfirm v-if="record.is_active" title="停用这名员工？" ok-text="停用" cancel-text="取消" @confirm="setActive(record, false)">
+                <a-switch :checked="record.is_active" size="small" :aria-label="`停用 ${record.display_name}`" />
+              </a-popconfirm>
+              <a-switch v-else :checked="record.is_active" size="small" :aria-label="`启用 ${record.display_name}`" @change="toggleActive(record, $event)" />
+            </a-space>
+          </template></a-table-column>
+        </a-table>
+      </template>
     </a-card>
 
     <a-modal v-model:open="modalOpen" :title="editing ? '编辑员工' : '新增员工'" ok-text="保存" :ok-button-props="{ 'aria-label': '保存' }" cancel-text="取消" :confirm-loading="saving" @ok="saveUser" @cancel="closeModal">

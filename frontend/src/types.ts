@@ -43,13 +43,4 @@ export interface PendingItem {
   }
 }
 
-export type {
-  ApiEnvelope,
-  ApprovalAction,
-  ApprovalNode,
-  ApprovalRequestDetail,
-  ApprovalType,
-  ApprovalUser,
-  FlowNodeDef,
-  FormField,
-} from './types/approval'
+export type * from './types/approval'

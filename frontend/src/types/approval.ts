@@ -4,6 +4,8 @@ export type ProcessVersionStatus = 'draft' | 'published'
 export type ApprovalRequestStatus = 'pending' | 'approved' | 'rejected' | 'revoked'
 export type ApprovalNodeStatus = 'pending' | 'approved' | 'rejected'
 export type MonitorStatus = ApprovalRequestStatus
+export type FlowNodeType = 'start' | 'approval' | 'countersign' | 'condition' | 'end'
+export type ApprovalMode = 'single' | 'counter_sign'
 
 export interface ApiEnvelope<T> { data: T }
 
@@ -38,12 +40,15 @@ export interface FormField {
 export interface FormSchema { fields: FormField[] }
 
 export interface FlowNodeDef {
+  id: string
   index: number
-  name: string
-  type: 'single' | 'counter_sign'
+  type: FlowNodeType
+  name?: string
+  label?: string
+  approval_type?: ApprovalMode
   approver_id?: string
   approver_ids?: string[]
-  allow_transfer: boolean
+  allow_transfer?: boolean
   require_attachment?: boolean
   attachment_types?: string[]
   timeout_hours?: number
@@ -51,9 +56,10 @@ export interface FlowNodeDef {
 
 export interface FlowNodeSchema {
   id: string
-  type: 'start' | 'approval' | 'countersign' | 'condition' | 'end'
+  type: FlowNodeType
   name?: string
-  approval_type?: 'single' | 'counter_sign'
+  label?: string
+  approval_type?: ApprovalMode
   approver_id?: string
   approver_ids?: string[]
   [key: string]: unknown
@@ -104,20 +110,19 @@ export interface ProcessApp {
 
 export interface ApprovalNode {
   id: number
-  node_id?: string | null
   node_index: number
+  node_key: string | null
+  timeout_hours: number
   approver_id: string
   approver_name: string
   status: ApprovalNodeStatus
   comment: string | null
   acted_at: string | null
-  timeout_hours?: number
 }
 
 export interface ApprovalAction {
   id: number
   node_id: number
-  request_id?: number
   actor_id: string
   actor_name: string
   action: string
@@ -132,10 +137,11 @@ export interface ApprovalRequestDetail {
   process_version_id: number | null
   applicant_id: string
   applicant_name: string
-  applicant_snapshot?: Record<string, unknown> | null
+  applicant_snapshot: Record<string, unknown> | null
   title: string
   form_data: Record<string, unknown>
-  form_schema_snapshot?: FormSchema | null
+  form_schema_snapshot: FormSchema | Record<string, unknown> | null
+  idempotency_key: string | null
   status: ApprovalRequestStatus
   current_node_index: number
   flow_snapshot: FlowNodeDef[]
@@ -156,14 +162,43 @@ export interface MonitorSummary {
   overdue: number
 }
 
+export interface MonitorPerson {
+  id: string
+  name: string
+  email: string | null
+  department: string | null
+  position: string | null
+}
+
+export interface MonitorProcess {
+  id: number | null
+  code: string | null
+  name: string | null
+  version_id: number | null
+  version_number: number | null
+}
+
+export interface MonitorCurrentNode {
+  id: number | null
+  node_index: number
+  node_key: string | null | undefined
+  name: string | null | undefined
+  status: ApprovalNodeStatus | null
+  timeout_hours: number
+  created_at: string | null
+}
+
 export interface MonitorRequestItem {
   id: number
   title: string
   status: ApprovalRequestStatus
-  applicant: ApprovalUser | null
-  process_app: Pick<ProcessApp, 'id' | 'code' | 'name'> | null
-  current_approver: ApprovalUser | null
   submitted_at: string | null
+  created_at: string
+  process_app: MonitorProcess
+  applicant: MonitorPerson
+  current_node: MonitorCurrentNode
+  current_approvers: MonitorPerson[]
+  current_approver: MonitorPerson | null
   overdue: boolean
 }
 
