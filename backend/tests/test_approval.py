@@ -1,9 +1,15 @@
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+from threading import Barrier
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 
+from app.approval import router as approval_router
+from app.approval.database import ApprovalSessionLocal
 from app.approval.models import ApprovalAction, ApprovalUser, ProcessVersion
 
 PRODUCT_USER_ID = "22222222-2222-2222-2222-222222222222"
@@ -191,6 +197,39 @@ def _rich_form_data() -> dict:
         "tags": ["urgent"],
         "period": ["2026-07-01", "2026-07-31"],
         "items": [{"name": "服务器", "quantity": 2, "kind": "server"}],
+    }
+
+
+def _top_level_types_definition() -> dict:
+    definition = _single_step_definition()
+    definition["code"] = f"top-level-{uuid4().hex[:8]}"
+    definition["form_schema"] = {
+        "fields": [
+            {"id": "notes", "label": "说明", "type": "textarea", "required": True},
+            {"id": "due_date", "label": "日期", "type": "date", "required": True},
+            {
+                "id": "priority",
+                "label": "优先级",
+                "type": "radio",
+                "required": True,
+                "options": ["high", "normal"],
+            },
+            {"id": "requester", "label": "申请人", "type": "user", "required": True},
+            {"id": "team", "label": "部门", "type": "department", "required": True},
+            {"id": "proof", "label": "附件", "type": "attachment", "required": True},
+        ]
+    }
+    return definition
+
+
+def _top_level_types_data() -> dict:
+    return {
+        "notes": "采购说明",
+        "due_date": "2026-07-31",
+        "priority": "high",
+        "requester": PRODUCT_USER_ID,
+        "team": "产品研发部",
+        "proof": "https://files.example/proof.pdf",
     }
 
 
@@ -445,6 +484,55 @@ def test_submit_accepts_a_valid_detail_table(client, admin_headers):
     assert response.status_code == 201
 
 
+@pytest.mark.parametrize(
+    ("form_data", "field_id"),
+    [
+        ({**_top_level_types_data(), "notes": 1}, "notes"),
+        ({**_top_level_types_data(), "due_date": "not-a-date"}, "due_date"),
+        ({**_top_level_types_data(), "priority": "urgent"}, "priority"),
+        ({**_top_level_types_data(), "requester": [PRODUCT_USER_ID]}, "requester"),
+        ({**_top_level_types_data(), "team": {"name": "产品研发部"}}, "team"),
+        ({**_top_level_types_data(), "proof": [1]}, "proof"),
+    ],
+)
+def test_submit_rejects_invalid_top_level_field_types(client, admin_headers, form_data, field_id):
+    app = _create_and_publish_app(client, admin_headers, _top_level_types_definition())
+
+    response = client.post(
+        "/api/v1/approvals/requests",
+        headers=admin_headers,
+        json={
+            "process_app_id": app["id"],
+            "title": "顶层字段校验",
+            "form_data": form_data,
+            "idempotency_key": f"top-level-{uuid4().hex}",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["field_id"] == field_id
+
+
+def test_submit_rejects_malformed_options_shape_with_field_detail(client, admin_headers):
+    definition = _top_level_types_definition()
+    definition["form_schema"]["fields"][2]["options"] = "high"
+    app = _create_and_publish_app(client, admin_headers, definition)
+
+    response = client.post(
+        "/api/v1/approvals/requests",
+        headers=admin_headers,
+        json={
+            "process_app_id": app["id"],
+            "title": "选项形状校验",
+            "form_data": _top_level_types_data(),
+            "idempotency_key": "malformed-options",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["field_id"] == "priority"
+
+
 def test_submit_rejects_ambiguous_process_and_legacy_selectors(client, admin_headers):
     app = _create_and_publish_app(client, admin_headers, _branching_definition())
 
@@ -543,6 +631,124 @@ def test_revoke_and_urge_remain_available_for_process_app_requests(client, admin
     assert urged.status_code == 200
     assert revoked.status_code == 200
     assert revoked.json()["data"]["status"] == "revoked"
+
+
+def test_terminal_revoke_and_urge_return_conflict_without_new_urge_action(
+    client, admin_headers, db_session
+):
+    app = _create_and_publish_app(client, admin_headers, _single_step_definition())
+    request = client.post(
+        "/api/v1/approvals/requests", headers=admin_headers, json=_submit_body(app["id"])
+    ).json()["data"]
+    approved = client.post(
+        f"/api/v1/approvals/nodes/{request['nodes'][0]['id']}/approve",
+        headers=_headers(client, "product_demo_user"),
+        json={"comment": "同意"},
+    )
+    assert approved.status_code == 200
+    actions_before = db_session.scalars(
+        select(ApprovalAction).where(ApprovalAction.request_id == request["id"])
+    ).all()
+
+    stale_revoke = client.put(
+        f"/api/v1/approvals/requests/{request['id']}/revoke", headers=admin_headers
+    )
+    stale_urge = client.put(
+        f"/api/v1/approvals/requests/{request['id']}/urge", headers=admin_headers
+    )
+
+    assert stale_revoke.status_code == 409
+    assert stale_urge.status_code == 409
+    db_session.expire_all()
+    actions_after = db_session.scalars(
+        select(ApprovalAction).where(ApprovalAction.request_id == request["id"])
+    ).all()
+    assert len(actions_after) == len(actions_before)
+
+
+def test_concurrent_approvals_consume_once_and_countersign_advances_once(
+    client, admin_headers, db_session, monkeypatch
+):
+    original_consume = approval_router._consume_pending_node
+
+    def concurrent_approvals(node_user_pairs):
+        barrier = Barrier(len(node_user_pairs))
+
+        def synchronized_consume(db, node, status_value, comment, now):
+            barrier.wait(timeout=5)
+            return original_consume(db, node, status_value, comment, now)
+
+        monkeypatch.setattr(approval_router, "_consume_pending_node", synchronized_consume)
+
+        def approve(item):
+            node_id, actor_id, actor_name = item
+            with ApprovalSessionLocal() as db:
+                try:
+                    approval_router.approve_node(
+                        node_id,
+                        approval_router.ApproveRejectBody(comment="同意"),
+                        SimpleNamespace(id=actor_id, display_name=actor_name),
+                        db,
+                    )
+                    return 200
+                except HTTPException as exc:
+                    db.rollback()
+                    return exc.status_code
+
+        try:
+            with ThreadPoolExecutor(max_workers=len(node_user_pairs)) as executor:
+                futures = [executor.submit(approve, item) for item in node_user_pairs]
+                return [future.result(timeout=10) for future in futures]
+        finally:
+            monkeypatch.setattr(approval_router, "_consume_pending_node", original_consume)
+
+    app_definition = _single_step_definition()
+    app_definition["flow_schema"]["nodes"][1]["allow_transfer"] = True
+    app_data = _create_and_publish_app(client, admin_headers, app_definition)
+    request = client.post(
+        "/api/v1/approvals/requests", headers=admin_headers, json=_submit_body(app_data["id"])
+    ).json()["data"]
+    duplicate_results = concurrent_approvals(
+        [
+            (request["nodes"][0]["id"], PRODUCT_USER_ID, "产品演示用户"),
+            (request["nodes"][0]["id"], PRODUCT_USER_ID, "产品演示用户"),
+        ]
+    )
+
+    assert sorted(duplicate_results) == [200, 400]
+    duplicate_actions = db_session.scalars(
+        select(ApprovalAction).where(ApprovalAction.node_id == request["nodes"][0]["id"])
+    ).all()
+    assert len(duplicate_actions) == 1
+
+    countersign_app = _create_and_publish_app(client, admin_headers, _countersign_definition())
+    countersign_request = client.post(
+        "/api/v1/approvals/requests",
+        headers=admin_headers,
+        json=_submit_body(countersign_app["id"], key="concurrent-countersign"),
+    ).json()["data"]
+    client.post(
+        f"/api/v1/approvals/nodes/{countersign_request['nodes'][0]['id']}/approve",
+        headers=_headers(client, "product_demo_user"),
+        json={"comment": "同意"},
+    )
+    detail = client.get(
+        f"/api/v1/approvals/requests/{countersign_request['id']}", headers=admin_headers
+    ).json()["data"]
+    countersign_nodes = [node for node in detail["nodes"] if node["node_key"] == "directors"]
+    countersign_results = concurrent_approvals(
+        [
+            (countersign_nodes[0]["id"], DIRECTOR_USER_ID, "平台管理员"),
+            (countersign_nodes[1]["id"], PRODUCT_USER_ID, "产品演示用户"),
+        ]
+    )
+
+    assert countersign_results == [200, 200]
+    current = client.get(
+        f"/api/v1/approvals/requests/{countersign_request['id']}", headers=admin_headers
+    ).json()["data"]
+    assert current["status"] == "pending"
+    assert current["current_node_index"] == 2
 
 
 def test_legacy_submission_remains_available(client, admin_headers):

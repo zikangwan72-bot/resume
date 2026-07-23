@@ -784,23 +784,31 @@ def revoke_request(
         raise HTTPException(status_code=404, detail="申请不存在")
     if req.applicant_id != user.id:
         raise HTTPException(status_code=403, detail="只能撤回自己的申请")
-    if req.status != "pending":
-        raise HTTPException(status_code=400, detail="只有待审批状态的申请可以撤回")
-
-    req.status = "revoked"
-    req.updated_at = datetime.now(UTC)
+    now = datetime.now(UTC)
+    revoked = db.execute(
+        update(ApprovalRequest)
+        .where(
+            ApprovalRequest.id == request_id,
+            ApprovalRequest.applicant_id == user.id,
+            ApprovalRequest.status == "pending",
+        )
+        .values(status="revoked", updated_at=now)
+    )
+    if revoked.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="申请状态已变化，无法撤回")
 
     db.add(
         ApprovalAction(
             node_id=0,
-            request_id=req.id,
+            request_id=request_id,
             actor_id=user.id,
             actor_name=user.display_name,
             action="revoke",
         )
     )
     db.commit()
-    db.refresh(req)
+    req = db.get(ApprovalRequest, request_id)
     return {"data": _request_detail(req, db)}
 
 
@@ -815,22 +823,30 @@ def urge_request(
         raise HTTPException(status_code=404, detail="申请不存在")
     if req.applicant_id != user.id:
         raise HTTPException(status_code=403, detail="只能催办自己的申请")
-    if req.status not in ("pending",):
-        raise HTTPException(status_code=400, detail="当前状态不支持催办")
-
-    req.updated_at = datetime.now(UTC)
+    urged = db.execute(
+        update(ApprovalRequest)
+        .where(
+            ApprovalRequest.id == request_id,
+            ApprovalRequest.applicant_id == user.id,
+            ApprovalRequest.status == "pending",
+        )
+        .values(updated_at=datetime.now(UTC))
+    )
+    if urged.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="申请状态已变化，无法催办")
 
     db.add(
         ApprovalAction(
             node_id=0,
-            request_id=req.id,
+            request_id=request_id,
             actor_id=user.id,
             actor_name=user.display_name,
             action="urge",
         )
     )
     db.commit()
-    db.refresh(req)
+    req = db.get(ApprovalRequest, request_id)
     return {"data": _request_detail(req, db)}
 
 
