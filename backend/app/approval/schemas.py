@@ -1,5 +1,7 @@
 from dataclasses import dataclass
-from typing import Literal, NotRequired, TypedDict
+from typing import Annotated, Any, Literal, NotRequired, TypedDict
+
+from pydantic import BaseModel, Field
 
 FieldType = Literal[
     "text",
@@ -74,3 +76,39 @@ class FlowEdgeDefinition(TypedDict):
     target: str
     condition: NotRequired[ConditionDefinition]
     default: NotRequired[bool]
+
+
+class ProcessAppCreate(BaseModel):
+    code: Annotated[str, Field(min_length=1, max_length=80)]
+    name: Annotated[str, Field(min_length=1, max_length=120)]
+    category: Annotated[str, Field(min_length=1, max_length=80)] = "通用审批"
+    description: str | None = None
+    form_schema: dict[str, Any]
+    flow_schema: dict[str, Any]
+
+
+class ProcessAppUpdate(BaseModel):
+    code: Annotated[str, Field(min_length=1, max_length=80)] | None = None
+    name: Annotated[str, Field(min_length=1, max_length=120)] | None = None
+    category: Annotated[str, Field(min_length=1, max_length=80)] | None = None
+    description: str | None = None
+    form_schema: dict[str, Any] | None = None
+    flow_schema: dict[str, Any] | None = None
+
+
+class ApprovalUserCreate(BaseModel):
+    display_name: Annotated[str, Field(min_length=1, max_length=100)]
+    email: Annotated[str, Field(min_length=3, max_length=255)]
+    department: Annotated[str, Field(min_length=1, max_length=100)]
+    position: Annotated[str, Field(min_length=1, max_length=100)]
+    role: Annotated[str, Field(min_length=1, max_length=50)]
+    is_active: bool = True
+
+
+class ApprovalUserUpdate(BaseModel):
+    position: Annotated[str, Field(min_length=1, max_length=100)]
+    display_name: Annotated[str, Field(min_length=1, max_length=100)] | None = None
+    email: Annotated[str, Field(min_length=3, max_length=255)] | None = None
+    department: Annotated[str, Field(min_length=1, max_length=100)] | None = None
+    role: Annotated[str, Field(min_length=1, max_length=50)] | None = None
+    is_active: bool | None = None
