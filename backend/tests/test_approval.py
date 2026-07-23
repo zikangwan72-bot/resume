@@ -485,6 +485,59 @@ def test_submit_accepts_a_valid_detail_table(client, admin_headers):
 
 
 @pytest.mark.parametrize(
+    ("schema_patch", "data_patch", "field_id"),
+    [
+        ({"fields": {1: {"min": 10, "max": 20, "precision": 0}}}, {"amount": 5}, "amount"),
+        ({"fields": {1: {"precision": 2}}}, {"amount": 12.345}, "amount"),
+        (
+            {
+                "fields": {
+                    5: {
+                        "columns": [
+                            {"id": "name", "label": "名称", "type": "text", "required": True},
+                            {
+                                "id": "kind",
+                                "label": "分类",
+                                "type": "select",
+                                "required": True,
+                                "options": ["server"],
+                            },
+                        ]
+                    }
+                }
+            },
+            {"items": [{"name": "服务器", "kind": "storage"}]},
+            "items.0.kind",
+        ),
+    ],
+)
+def test_submit_enforces_numeric_and_detail_column_constraints(
+    client, admin_headers, db_session, schema_patch, data_patch, field_id
+):
+    app = _create_and_publish_app(client, admin_headers, _rich_form_definition())
+    version = db_session.get(ProcessVersion, app["version_id"])
+    schema = deepcopy(version.form_schema)
+    for index, patch in schema_patch["fields"].items():
+        schema["fields"][index].update(patch)
+    version.form_schema = schema
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/approvals/requests",
+        headers=admin_headers,
+        json={
+            "process_app_id": app["id"],
+            "title": "运行时字段约束",
+            "form_data": {**_rich_form_data(), **data_patch},
+            "idempotency_key": f"constraints-{uuid4().hex}",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["field_id"] == field_id
+
+
+@pytest.mark.parametrize(
     ("form_data", "field_id"),
     [
         ({**_top_level_types_data(), "notes": 1}, "notes"),
@@ -839,9 +892,7 @@ def test_transfer_race_prevents_stale_approver_from_consuming_reassigned_node(
         stale_status = stale_future.result(timeout=10)
 
     assert stale_status == 400
-    response = client.get(
-        f"/api/v1/approvals/requests/{request['id']}", headers=admin_headers
-    )
+    response = client.get(f"/api/v1/approvals/requests/{request['id']}", headers=admin_headers)
     detail = response.json()["data"]
     assert detail["status"] == "pending"
     assert detail["nodes"][0]["approver_id"] == DIRECTOR_USER_ID
@@ -894,9 +945,7 @@ def test_revoke_racing_terminal_approval_preserves_revoked_status(
 
     assert revoked.status_code == 200
     assert approval_status == 400
-    response = client.get(
-        f"/api/v1/approvals/requests/{request['id']}", headers=admin_headers
-    )
+    response = client.get(f"/api/v1/approvals/requests/{request['id']}", headers=admin_headers)
     detail = response.json()["data"]
     assert detail["status"] == "revoked"
     assert [item["action"] for item in detail["actions"]] == ["revoke"]

@@ -1,5 +1,6 @@
 from copy import deepcopy
 from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -208,6 +209,7 @@ def _validate_field_value(field: dict, value: object, field_id: str) -> None:
     if field_type in {"number", "money"}:
         if isinstance(value, bool) or not isinstance(value, int | float):
             raise _form_data_error(f"{label}必须是数字", field_id)
+        _validate_numeric_value(value, field, field_id, label)
     elif field_type in {"text", "textarea", "user", "department"}:
         if not isinstance(value, str):
             raise _form_data_error(f"{label}格式不正确", field_id)
@@ -276,6 +278,31 @@ def _validate_date_range(value: object, field_id: str, label: object) -> None:
         raise _form_data_error(f"{label}结束日期不能早于开始日期", field_id)
 
 
+def _validate_numeric_value(value: int | float, field: dict, field_id: str, label: object) -> None:
+    minimum, maximum, precision = field.get("min"), field.get("max"), field.get("precision")
+    if minimum is not None and (isinstance(minimum, bool) or not isinstance(minimum, int | float)):
+        raise _form_data_error(f"{label}数值配置无效", field_id)
+    if maximum is not None and (isinstance(maximum, bool) or not isinstance(maximum, int | float)):
+        raise _form_data_error(f"{label}数值配置无效", field_id)
+    if minimum is not None and maximum is not None and minimum > maximum:
+        raise _form_data_error(f"{label}数值配置无效", field_id)
+    if precision is not None and (
+        not isinstance(precision, int) or isinstance(precision, bool) or not 0 <= precision <= 6
+    ):
+        raise _form_data_error(f"{label}数值配置无效", field_id)
+    if minimum is not None and value < minimum:
+        raise _form_data_error(f"{label}不能小于最小值", field_id)
+    if maximum is not None and value > maximum:
+        raise _form_data_error(f"{label}不能大于最大值", field_id)
+    if precision is not None:
+        try:
+            places = max(0, -Decimal(str(value)).as_tuple().exponent)
+        except (InvalidOperation, ValueError) as exc:
+            raise _form_data_error(f"{label}必须是数字", field_id) from exc
+        if places > precision:
+            raise _form_data_error(f"{label}最多保留 {precision} 位小数", field_id)
+
+
 def _validate_detail_table(value: object, field: dict, field_id: str, label: object) -> None:
     if not isinstance(value, list):
         raise _form_data_error(f"{label}必须是明细行列表", field_id)
@@ -288,6 +315,14 @@ def _validate_detail_table(value: object, field: dict, field_id: str, label: obj
             raise _form_data_error(f"{label}列定义无效", field_id)
         column_id = column.get("id", column.get("key"))
         if not isinstance(column_id, str) or not column_id.strip():
+            raise _form_data_error(f"{label}列定义无效", field_id)
+        if column_id in column_definitions:
+            raise _form_data_error(f"{label}列定义无效", field_id)
+        if not isinstance(column.get("label"), str) or not column["label"].strip():
+            raise _form_data_error(f"{label}列定义无效", field_id)
+        if column.get("type") not in {"text", "number", "money", "date", "select"}:
+            raise _form_data_error(f"{label}列定义无效", field_id)
+        if not isinstance(column.get("required", False), bool):
             raise _form_data_error(f"{label}列定义无效", field_id)
         column_definitions[column_id] = column
     for row_index, row in enumerate(value):
@@ -302,9 +337,10 @@ def _validate_detail_table(value: object, field: dict, field_id: str, label: obj
 
 
 def _is_countersign_node(node: dict) -> bool:
-    return node.get("type") in {"countersign", "counter_sign"} or node.get(
-        "approval_type"
-    ) == "counter_sign"
+    return (
+        node.get("type") in {"countersign", "counter_sign"}
+        or node.get("approval_type") == "counter_sign"
+    )
 
 
 def _flow_node_at_index(request: ApprovalRequest, node_index: int) -> dict | None:
@@ -342,9 +378,7 @@ def _snapshot_flow(path: list[dict]) -> list[dict]:
     return [{**deepcopy(node), "index": index} for index, node in enumerate(path)]
 
 
-def _add_runtime_nodes(
-    db: Session, request: ApprovalRequest, flow_snapshot: list[dict]
-) -> None:
+def _add_runtime_nodes(db: Session, request: ApprovalRequest, flow_snapshot: list[dict]) -> None:
     for node_def in flow_snapshot:
         approver_ids = (
             node_def.get("approver_ids", [])
@@ -377,11 +411,7 @@ def _published_version(db: Session, process_app_id: int) -> tuple[ProcessApp, Pr
     if app is None or app.status != "published" or app.current_version_id is None:
         raise HTTPException(status_code=400, detail="流程应用不存在、未发布或已停用")
     version = db.get(ProcessVersion, app.current_version_id)
-    if (
-        version is None
-        or version.process_app_id != app.id
-        or version.status != "published"
-    ):
+    if version is None or version.process_app_id != app.id or version.status != "published":
         raise HTTPException(status_code=400, detail="流程应用的已发布版本不可用")
     return app, version
 
@@ -440,9 +470,7 @@ def submit_request(
     return _submit_legacy_request(body, user, db)
 
 
-def _submit_process_app_request(
-    body: SubmitRequest, user: User, db: Session
-) -> dict[str, Any]:
+def _submit_process_app_request(body: SubmitRequest, user: User, db: Session) -> dict[str, Any]:
     if not body.idempotency_key or not body.idempotency_key.strip():
         raise _form_data_error("幂等键不能为空")
     if not body.title.strip():
@@ -587,6 +615,7 @@ def list_my_requests(
     stmt = stmt.order_by(desc(ApprovalRequest.created_at)).limit(100)
     rows = db.scalars(stmt).all()
     return {"data": [_request_detail(r, db) for r in rows]}
+
 
 @router.get("/requests/{request_id}")
 def get_request(
@@ -933,9 +962,7 @@ def list_approval_users(
     db: Session = Depends(get_approval_db),
 ) -> dict[str, Any]:
     rows = db.scalars(
-        select(ApprovalUser)
-        .where(ApprovalUser.is_active)
-        .order_by(ApprovalUser.display_name)
+        select(ApprovalUser).where(ApprovalUser.is_active).order_by(ApprovalUser.display_name)
     ).all()
     return {
         "data": [

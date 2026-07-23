@@ -50,10 +50,14 @@ export type DetailColumnType = 'text' | 'number' | 'money' | 'date' | 'select'
 
 export interface DetailColumn {
   id: string
+  key: string
   label: string
   type: DetailColumnType
   required: boolean
   options?: string[]
+  min?: number
+  max?: number
+  precision?: number
 }
 
 export interface ProcessAppDraft {

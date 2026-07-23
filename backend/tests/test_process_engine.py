@@ -131,6 +131,69 @@ def test_validator_accepts_unique_scalar_choice_options():
 
 
 @pytest.mark.parametrize(
+    "detail_field, expected_code",
+    [
+        (
+            {
+                "id": "items",
+                "type": "detail_table",
+                "columns": [{"id": "name", "label": "", "type": "text"}],
+            },
+            "invalid_detail_column_label",
+        ),
+        (
+            {
+                "id": "items",
+                "type": "detail_table",
+                "columns": [{"id": "name", "label": "名称", "type": "textarea"}],
+            },
+            "invalid_detail_column_type",
+        ),
+        (
+            {
+                "id": "items",
+                "type": "detail_table",
+                "columns": [
+                    {"id": "name", "label": "名称", "type": "text"},
+                    {"id": "name", "label": "重复", "type": "text"},
+                ],
+            },
+            "duplicate_detail_column_id",
+        ),
+        (
+            {
+                "id": "items",
+                "type": "detail_table",
+                "columns": [
+                    {"id": "kind", "label": "类别", "type": "select", "options": ["", "A"]}
+                ],
+            },
+            "invalid_choice_options",
+        ),
+    ],
+)
+def test_validator_rejects_invalid_detail_columns(detail_field, expected_code):
+    form_schema = {"fields": [*FORM_SCHEMA["fields"], detail_field]}
+
+    assert expected_code in _error_codes(form_schema, FLOW_WITH_AMOUNT_BRANCH)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        {"id": "amount", "type": "money", "min": 10, "max": 1},
+        {"id": "amount", "type": "money", "precision": -1},
+        {"id": "amount", "type": "money", "precision": 1.5},
+        {"id": "amount", "type": "money", "precision": 7},
+    ],
+)
+def test_validator_rejects_invalid_numeric_constraints(field):
+    form_schema = {"fields": [field, {"id": "purpose", "type": "text"}]}
+
+    assert "invalid_numeric_constraints" in _error_codes(form_schema, FLOW_WITH_AMOUNT_BRANCH)
+
+
+@pytest.mark.parametrize(
     ("form_schema", "flow_schema", "expected_code"),
     [
         (

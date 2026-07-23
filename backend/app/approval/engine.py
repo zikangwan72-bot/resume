@@ -10,6 +10,7 @@ COMPARABLE_FIELD_TYPES = {"number", "money", "text", "textarea", "radio", "selec
 CONDITION_OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte", "contains", "not_contains"}
 NODE_TYPES = {"start", "approval", "countersign", "condition", "end"}
 APPROVAL_NODE_TYPES = {"approval", "countersign"}
+DETAIL_COLUMN_TYPES = {"text", "number", "money", "date", "select"}
 
 
 def compare_value(actual: object, operator: str, expected: object) -> bool:
@@ -144,9 +145,7 @@ def _validation_items(
     return schema[key]
 
 
-def _validate_fields(
-    fields: list[Any], errors: list[DefinitionError]
-) -> dict[str, object]:
+def _validate_fields(fields: list[Any], errors: list[DefinitionError]) -> dict[str, object]:
     field_types: dict[str, object] = {}
     field_ids: set[str] = set()
     for field in fields:
@@ -175,8 +174,65 @@ def _validate_fields(
                     field_id,
                 )
             )
+        if field_type in {"number", "money"} and not _valid_numeric_constraints(field):
+            errors.append(
+                _error("invalid_numeric_constraints", "数值字段范围或小数位配置无效", field_id)
+            )
+        if field_type == "detail_table":
+            _validate_detail_columns(field, field_id, errors)
         field_types[field_id] = field_type
     return field_types
+
+
+def _validate_detail_columns(
+    field: dict[str, Any], field_id: str, errors: list[DefinitionError]
+) -> None:
+    columns = field.get("columns")
+    if not isinstance(columns, list):
+        errors.append(_error("invalid_detail_columns", "明细表格必须配置列", field_id))
+        return
+    column_ids: set[str] = set()
+    for column in columns:
+        if not isinstance(column, dict):
+            errors.append(_error("invalid_detail_column_definition", "明细列必须是对象", field_id))
+            continue
+        column_id = column.get("id")
+        if not _valid_id(column_id):
+            errors.append(_error("invalid_detail_column_id", "明细列必须使用非空稳定 ID", field_id))
+            continue
+        if column_id in column_ids:
+            errors.append(_error("duplicate_detail_column_id", "明细列 ID 不能重复", field_id))
+            continue
+        column_ids.add(column_id)
+        if not isinstance(column.get("label"), str) or not column["label"].strip():
+            errors.append(_error("invalid_detail_column_label", "明细列名称不能为空", field_id))
+        column_type = column.get("type")
+        if column_type not in DETAIL_COLUMN_TYPES:
+            errors.append(_error("invalid_detail_column_type", "明细列类型不受支持", field_id))
+            continue
+        if not isinstance(column.get("required", False), bool):
+            errors.append(_error("invalid_detail_column_required", "明细列必填配置无效", field_id))
+        if column_type == "select" and not _valid_choice_options(column.get("options")):
+            errors.append(
+                _error("invalid_choice_options", "选择字段必须配置非空、不重复的标量选项", field_id)
+            )
+        if column_type in {"number", "money"} and not _valid_numeric_constraints(column):
+            errors.append(
+                _error("invalid_numeric_constraints", "数值字段范围或小数位配置无效", field_id)
+            )
+
+
+def _valid_numeric_constraints(field: dict[str, Any]) -> bool:
+    minimum, maximum, precision = field.get("min"), field.get("max"), field.get("precision")
+    if minimum is not None and (isinstance(minimum, bool) or not isinstance(minimum, int | float)):
+        return False
+    if maximum is not None and (isinstance(maximum, bool) or not isinstance(maximum, int | float)):
+        return False
+    if minimum is not None and maximum is not None and minimum > maximum:
+        return False
+    return precision is None or (
+        isinstance(precision, int) and not isinstance(precision, bool) and 0 <= precision <= 6
+    )
 
 
 def _valid_choice_options(options: object) -> bool:

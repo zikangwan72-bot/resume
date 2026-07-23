@@ -25,6 +25,11 @@ const columnTypes: Array<{ value: DetailColumnType; label: string }> = [
 const selectedId = ref<string | null>(null)
 const selected = computed(() => props.modelValue.fields.find((field) => field.id === selectedId.value) ?? null)
 const fieldId = () => crypto.randomUUID()
+const optionError = (options?: string[]) => {
+  const normalized = (options ?? []).map((option) => option.trim())
+  if (!normalized.length || normalized.some((option) => !option)) return '选项不能为空'
+  return new Set(normalized).size !== normalized.length ? '选项不能重复' : undefined
+}
 
 function defaultField(type: FieldType): FormField {
   const label = palette.find((item) => item.type === type)?.label ?? '字段'
@@ -52,12 +57,17 @@ function move(field: FormField, direction: -1 | 1) {
   if (target < 0 || target >= props.modelValue.fields.length) return
   const fields = [...props.modelValue.fields]; [fields[index], fields[target]] = [fields[target], fields[index]]; update(fields)
 }
-function updateOption(index: number, value: string) { if (selected.value) patchField({ options: (selected.value.options ?? []).map((option, itemIndex) => itemIndex === index ? value : option) }) }
-function addOption() { if (selected.value) patchField({ options: [...(selected.value.options ?? []), `选项 ${(selected.value.options?.length ?? 0) + 1}`] }) }
+function updateOption(index: number, value: string) { if (selected.value) patchField({ options: (selected.value.options ?? []).map((option, itemIndex) => itemIndex === index ? value.trim() : option) }) }
+function addOption() { if (selected.value) patchField({ options: [...(selected.value.options ?? []), ''] }) }
 function removeOption(index: number) { if (selected.value) patchField({ options: (selected.value.options ?? []).filter((_, itemIndex) => itemIndex !== index) }) }
-function addColumn() { if (selected.value) patchField({ columns: [...(selected.value.columns ?? []), { id: fieldId(), label: '明细列', type: 'text', required: false }] }) }
+function addColumn() { if (selected.value) { const id = fieldId(); patchField({ columns: [...(selected.value.columns ?? []), { id, key: id, label: '明细列', type: 'text', required: false }] }) } }
 function patchColumn(id: string, patch: Partial<DetailColumn>) { if (selected.value) patchField({ columns: (selected.value.columns ?? []).map((column) => column.id === id ? { ...column, ...patch } : column) }) }
 function removeColumn(id: string) { if (selected.value) patchField({ columns: (selected.value.columns ?? []).filter((column) => column.id !== id) }) }
+function duplicateColumn(column: DetailColumn) { if (selected.value) { const id = fieldId(); const copy = { ...column, id, key: id, label: `${column.label}（副本）`, options: column.options ? [...column.options] : undefined }; const index = selected.value.columns?.indexOf(column) ?? -1; patchField({ columns: [...(selected.value.columns ?? []).slice(0, index + 1), copy, ...(selected.value.columns ?? []).slice(index + 1)] }) } }
+function moveColumn(column: DetailColumn, direction: -1 | 1) { if (selected.value) { const columns = [...(selected.value.columns ?? [])]; const index = columns.indexOf(column); const target = index + direction; if (target >= 0 && target < columns.length) { [columns[index], columns[target]] = [columns[target], columns[index]]; patchField({ columns }) } } }
+function updateColumnOption(column: DetailColumn, index: number, value: string) { patchColumn(column.id, { options: (column.options ?? []).map((option, itemIndex) => itemIndex === index ? value.trim() : option) }) }
+function addColumnOption(column: DetailColumn) { patchColumn(column.id, { options: [...(column.options ?? []), ''] }) }
+function removeColumnOption(column: DetailColumn, index: number) { patchColumn(column.id, { options: (column.options ?? []).filter((_, itemIndex) => itemIndex !== index) }) }
 </script>
 
 <template>
@@ -74,8 +84,8 @@ function removeColumn(id: string) { if (selected.value) patchField({ columns: (s
       </div>
       <a-empty v-if="!modelValue.fields.length" description="从左侧选择字段开始设计" />
       <ul v-else class="field-list" aria-label="业务字段">
-        <li v-for="(field, index) in modelValue.fields" :key="field.id" :data-field-id="field.id" :class="['field-row', { selected: selectedId === field.id }]" @click="selectedId = field.id">
-          <div class="field-copy"><strong>{{ field.label }}</strong><span>{{ field.type }}</span></div>
+        <li v-for="(field, index) in modelValue.fields" :key="field.id" :data-field-id="field.id" :class="['field-row', { selected: selectedId === field.id }]">
+          <button class="field-select" :aria-label="`选择字段 ${field.label}`" @click="selectedId = field.id"><span class="field-copy"><strong>{{ field.label }}</strong><span>{{ field.type }}</span></span></button>
           <div class="field-actions">
             <a-tooltip title="上移"><a-button type="text" :disabled="index === 0" aria-label="上移字段" @click.stop="move(field, -1)"><ArrowUpOutlined /></a-button></a-tooltip>
             <a-tooltip title="下移"><a-button type="text" :disabled="index === modelValue.fields.length - 1" aria-label="下移字段" @click.stop="move(field, 1)"><ArrowDownOutlined /></a-button></a-tooltip>
@@ -95,7 +105,7 @@ function removeColumn(id: string) { if (selected.value) patchField({ columns: (s
         <a-form-item label="帮助说明"><a-textarea aria-label="帮助说明" :value="selected.help" :rows="2" @update:value="patchField({ help: $event })" /></a-form-item>
         <a-form-item><a-checkbox :checked="selected.required" @update:checked="patchField({ required: $event })">必填</a-checkbox></a-form-item>
         <template v-if="choiceTypes.has(selected.type)">
-          <a-form-item label="选项" :validate-status="selected.options?.filter(Boolean).length ? undefined : 'error'" :help="selected.options?.filter(Boolean).length ? undefined : '至少保留一个选项'">
+          <a-form-item label="选项" :validate-status="optionError(selected.options) ? 'error' : undefined" :help="optionError(selected.options)">
             <div v-for="(option, index) in selected.options" :key="index" class="option-line"><a-input aria-label="选项" :value="option" @update:value="updateOption(index, $event)" /><a-button type="text" danger aria-label="删除选项" @click="removeOption(index)"><DeleteOutlined /></a-button></div>
             <a-button size="small" aria-label="添加选项" @click="addOption"><PlusOutlined /> 添加选项</a-button>
           </a-form-item>
@@ -108,9 +118,12 @@ function removeColumn(id: string) { if (selected.value) patchField({ columns: (s
         <template v-if="selected.type === 'detail_table'">
           <a-divider orientation="left">明细列</a-divider>
           <div v-for="column in selected.columns" :key="column.id" class="column-editor">
+            <a-input aria-label="明细列编号" :value="column.key" @update:value="patchColumn(column.id, { key: $event.trim(), id: $event.trim() || column.id })" />
             <a-input aria-label="明细列名称" :value="column.label" @update:value="patchColumn(column.id, { label: $event })" />
-            <a-select aria-label="明细列类型" :value="column.type" :options="columnTypes" @update:value="patchColumn(column.id, { type: $event as DetailColumnType })" />
-            <a-button type="text" danger aria-label="删除明细列" @click="removeColumn(column.id)"><DeleteOutlined /></a-button>
+            <a-select aria-label="明细列类型" :value="column.type" :options="columnTypes" @update:value="patchColumn(column.id, { type: $event as DetailColumnType, options: $event === 'select' ? (column.options ?? ['']) : undefined })" />
+            <a-checkbox :checked="column.required" aria-label="明细列必填" @update:checked="patchColumn(column.id, { required: $event })">必填</a-checkbox>
+            <a-tooltip title="上移"><a-button type="text" aria-label="上移明细列" @click="moveColumn(column, -1)"><ArrowUpOutlined /></a-button></a-tooltip><a-tooltip title="下移"><a-button type="text" aria-label="下移明细列" @click="moveColumn(column, 1)"><ArrowDownOutlined /></a-button></a-tooltip><a-tooltip title="复制"><a-button type="text" aria-label="复制明细列" @click="duplicateColumn(column)"><CopyOutlined /></a-button></a-tooltip><a-tooltip title="删除"><a-button type="text" danger aria-label="删除明细列" @click="removeColumn(column.id)"><DeleteOutlined /></a-button></a-tooltip>
+            <template v-if="column.type === 'select'"><div v-for="(option, index) in column.options" :key="index" class="option-line column-options"><a-input aria-label="明细列选项" :value="option" @update:value="updateColumnOption(column, index, $event)" /><a-button type="text" danger aria-label="删除明细列选项" @click="removeColumnOption(column, index)"><DeleteOutlined /></a-button></div><a-form-item :validate-status="optionError(column.options) ? 'error' : undefined" :help="optionError(column.options)"><a-button size="small" aria-label="添加明细列选项" @click="addColumnOption(column)"><PlusOutlined /> 添加明细列选项</a-button></a-form-item></template>
           </div>
           <a-button size="small" aria-label="新增明细列" @click="addColumn"><PlusOutlined /> 新增明细列</a-button>
         </template>
@@ -124,7 +137,7 @@ function removeColumn(id: string) { if (selected.value) patchField({ columns: (s
 .palette, .properties { padding: 16px; background: #fafafa; min-width: 0; } .palette { border-right: 1px solid #f0f0f0; } .properties { border-left: 1px solid #f0f0f0; }
 h3 { margin: 0 0 12px; font-size: 14px; } .palette-grid { display: grid; grid-template-columns: 1fr; gap: 8px; } .palette-grid :deep(.ant-btn) { text-align: left; }
 .canvas { min-width: 0; padding: 20px; background: #f5f5f5; } .applicant-lock { display: flex; flex-direction: column; gap: 4px; padding: 14px; border: 1px solid #91caff; background: #e6f4ff; } .applicant-lock span, .field-copy span { color: #8c8c8c; font-size: 12px; }
-.field-list { display: grid; gap: 10px; padding: 0; margin: 16px 0 0; list-style: none; } .field-row { display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid #d9d9d9; background: #fff; cursor: pointer; } .field-row.selected { border-color: #1677ff; box-shadow: 0 0 0 2px #e6f4ff; } .field-copy { display: grid; gap: 2px; min-width: 0; } .field-actions { display: flex; flex: 0 0 auto; }
-.option-line, .column-editor { display: flex; gap: 6px; margin-bottom: 8px; align-items: center; } .column-editor :deep(.ant-input), .column-editor :deep(.ant-select) { min-width: 0; flex: 1; }
+.field-list { display: grid; gap: 10px; padding: 0; margin: 16px 0 0; list-style: none; } .field-row { display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid #d9d9d9; background: #fff; } .field-row.selected { border-color: #1677ff; box-shadow: 0 0 0 2px #e6f4ff; } .field-select { display: grid; flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; } .field-copy { display: grid; gap: 2px; min-width: 0; } .field-actions { display: flex; flex: 0 0 auto; }
+.option-line, .column-editor { display: flex; gap: 6px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; } .column-editor :deep(.ant-input), .column-editor :deep(.ant-select) { min-width: 120px; flex: 1; } .column-options { width: 100%; }
 @media (max-width: 760px) { .designer { grid-template-columns: 1fr; overflow: visible; } .palette, .properties { border: 0; border-bottom: 1px solid #f0f0f0; } .palette-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .canvas { padding: 12px; } .field-actions { gap: 0; } }
 </style>

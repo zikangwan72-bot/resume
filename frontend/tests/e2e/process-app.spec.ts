@@ -382,11 +382,13 @@ test('edits an app, configures choices and detail columns, and surfaces save fai
     form_schema: { fields: [{ id: 'reason', key: 'reason', type: 'text', label: '请假事由', required: true }] },
   }
   let saveFailed = false
+  let updatePayload: any
   await page.route('**/api/v1/admin/process-apps/**', async (route) => {
     const method = route.request().method()
     if (method === 'GET') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: app }) })
     if (method === 'PUT') {
       saveFailed = true
+      updatePayload = route.request().postDataJSON()
       return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ detail: '流程编号已存在' }) })
     }
     return route.continue()
@@ -399,6 +401,7 @@ test('edits an app, configures choices and detail columns, and surfaces save fai
   await page.getByLabel('字段名称').fill('出行方式')
   await page.getByRole('textbox', { name: '选项' }).fill('飞机')
   await page.getByRole('button', { name: '添加选项' }).click()
+  await page.getByRole('textbox', { name: '选项' }).last().fill('火车')
   await page.locator('[data-field-type="detail_table"]').click()
   await page.getByLabel('字段名称').fill('费用明细')
   await page.getByRole('button', { name: '新增明细列' }).click()
@@ -406,6 +409,8 @@ test('edits an app, configures choices and detail columns, and surfaces save fai
   await page.getByRole('button', { name: '保存草稿' }).click()
   await expect(page.getByText('流程编号已存在')).toBeVisible()
   expect(saveFailed).toBeTruthy()
+  expect(updatePayload.form_schema.fields.find((field: any) => field.id === 'reason')).toMatchObject({ key: 'reason', label: '请假事由' })
+  expect(updatePayload.form_schema.fields.find((field: any) => field.type === 'detail_table').columns[0]).toMatchObject({ key: expect.any(String), label: '金额' })
 })
 
 test('keeps the process editor within the mobile viewport', async ({ page }) => {
@@ -418,6 +423,59 @@ test('keeps the process editor within the mobile viewport', async ({ page }) => 
   await page.getByRole('button', { name: '下一步' }).click()
   await expect(page.getByText('申请人信息')).toBeVisible()
   await page.screenshot({ path: '../artifacts/task-9-editor-mobile.png', fullPage: true })
+  const layout = await page.evaluate(() => ({ viewport: window.innerWidth, scrollWidth: document.documentElement.scrollWidth }))
+  expect(layout.scrollWidth).toBeLessThanOrEqual(layout.viewport)
+})
+
+test('normalizes form options and detail columns before posting every palette field', async ({ page }) => {
+  let payload: any
+  await page.route('**/api/v1/admin/process-apps', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    payload = route.request().postDataJSON()
+    return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { ...seededProcessApps[0], ...payload, id: 101, version_id: 101, current_version_id: 101 } }) })
+  })
+  await loginAsAdmin(page)
+  await page.goto('/admin/process-apps/new')
+  await page.getByLabel('流程名称').fill('完整表单')
+  await page.getByLabel('流程编号').fill('complete-form')
+  await page.getByRole('button', { name: '下一步' }).click()
+  for (const type of ['text', 'textarea', 'number', 'money', 'date', 'date_range', 'radio', 'checkbox', 'select', 'user', 'department', 'attachment', 'section', 'detail_table']) await page.locator(`[data-field-type="${type}"]`).click()
+  await expect(page.locator('[data-field-id]')).toHaveCount(14)
+  const detail = page.locator('[data-field-id]').last()
+  await detail.getByRole('button', { name: '选择字段' }).click()
+  await page.getByRole('button', { name: '新增明细列' }).click()
+  await page.getByLabel('明细列编号').fill('cost_type')
+  await page.getByLabel('明细列名称').fill('费用类型')
+  await page.getByLabel('明细列类型').click()
+  await page.getByText('下拉选择', { exact: true }).last().click()
+  await page.getByRole('textbox', { name: '明细列选项' }).fill('  交通  ')
+  await page.screenshot({ path: '../artifacts/task-9-review-desktop.png', fullPage: true })
+  await page.getByRole('button', { name: '保存草稿' }).click()
+  await expect(page).toHaveURL('/admin/process-apps/101/edit')
+  expect(payload.form_schema.fields.every((field: any) => field.id && field.key === field.id)).toBeTruthy()
+  const savedColumn = payload.form_schema.fields.find((field: any) => field.type === 'detail_table').columns[0]
+  expect(savedColumn).toMatchObject({ id: 'cost_type', key: 'cost_type', label: '费用类型', type: 'select', options: ['交通'] })
+})
+
+test('blocks duplicate or blank choice options and keeps mobile properties reachable', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await loginAsAdmin(page)
+  await page.goto('/admin/process-apps/new')
+  await page.getByLabel('流程名称').fill('移动配置')
+  await page.getByLabel('流程编号').fill('mobile-config')
+  await page.getByRole('button', { name: '下一步' }).click()
+  await page.locator('[data-field-type="select"]').click()
+  await page.getByRole('textbox', { name: '选项' }).fill('   ')
+  await expect(page.getByText('选项不能为空')).toBeVisible()
+  await page.getByRole('textbox', { name: '选项' }).fill('项目')
+  await page.getByRole('button', { name: '添加选项' }).click()
+  await page.getByRole('textbox', { name: '选项' }).last().fill('项目')
+  await expect(page.getByText('选项不能重复')).toBeVisible()
+  await page.locator('[data-field-type="detail_table"]').click()
+  await page.locator('[data-field-id]').last().getByRole('button', { name: '选择字段' }).click()
+  await page.getByRole('button', { name: '新增明细列' }).click()
+  await expect(page.getByLabel('明细列名称')).toBeVisible()
+  await page.screenshot({ path: '../artifacts/task-9-review-mobile.png', fullPage: true })
   const layout = await page.evaluate(() => ({ viewport: window.innerWidth, scrollWidth: document.documentElement.scrollWidth }))
   expect(layout.scrollWidth).toBeLessThanOrEqual(layout.viewport)
 })

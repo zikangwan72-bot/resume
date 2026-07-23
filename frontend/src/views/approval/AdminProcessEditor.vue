@@ -13,25 +13,45 @@ const isEdit = computed(() => typeof route.params.id === 'string')
 const formRules = { name: [{ required: true, whitespace: true, message: '请输入流程名称', trigger: 'blur' }], code: [{ required: true, whitespace: true, message: '请输入流程编号', trigger: 'blur' }, { pattern: /^[A-Za-z][A-Za-z0-9_-]*$/, message: '编号须以字母开头，只能使用字母、数字、下划线或连字符', trigger: 'blur' }], category: [{ required: true, message: '请选择流程分类', trigger: 'change' }] }
 const snapshot = () => JSON.stringify(draft)
 const dirty = computed(() => loaded.value && snapshot() !== baseline.value)
-function apply(app: ProcessApp) {
-  const ids = new Set<string>()
-  const fields = (app.form_schema?.fields ?? []).map((field) => {
-    const id = field.id && !ids.has(field.id) ? field.id : crypto.randomUUID()
-    ids.add(id)
-    return { ...field, id, key: field.key || id }
+function normalizedOptions(options?: string[]) { return options?.map((option) => option.trim()) }
+function normalizeFields(fields: ProcessAppDraft['form_schema']['fields']) {
+  const fieldIds = new Set<string>()
+  return fields.map((field) => {
+    let id = field.id || field.key
+    if (!id || fieldIds.has(id)) id = crypto.randomUUID()
+    fieldIds.add(id)
+    const columnIds = new Set<string>()
+    const columns = field.columns?.map((column) => {
+      let columnId = column.id || column.key
+      if (!columnId || columnIds.has(columnId)) columnId = crypto.randomUUID()
+      columnIds.add(columnId)
+      return { ...column, id: columnId, key: columnId, label: column.label.trim(), options: normalizedOptions(column.options) }
+    })
+    return { ...field, id, key: id, label: field.label.trim(), options: normalizedOptions(field.options), columns }
   })
+}
+function apply(app: ProcessApp) {
+  const fields = normalizeFields(app.form_schema?.fields ?? [])
   Object.assign(draft, { id: app.id, code: app.code, name: app.name, category: app.category, description: app.description ?? '', form_schema: { fields }, flow_schema: app.flow_schema ?? { nodes: [], edges: [] } })
 }
 function validateSchema() {
+  draft.form_schema = { fields: normalizeFields(draft.form_schema.fields) }
   const ids = new Set<string>()
   for (const field of draft.form_schema.fields) {
     if (!field.id || ids.has(field.id)) { message.error('字段标识不能为空或重复'); step.value = 1; return false }
     ids.add(field.id)
-    if (['radio', 'checkbox', 'select'].includes(field.type) && !field.options?.some((option) => option.trim())) { message.error(`字段“${field.label || '未命名'}”至少需要一个选项`); step.value = 1; return false }
+    if (['radio', 'checkbox', 'select'].includes(field.type)) {
+      const options = field.options ?? []
+      if (!options.length || options.some((option) => !option) || new Set(options).size !== options.length) { message.error(`字段“${field.label || '未命名'}”的选项不能为空或重复`); step.value = 1; return false }
+    }
+    if (['number', 'money'].includes(field.type) && (!Number.isInteger(field.precision ?? 0) || (field.precision ?? 0) < 0 || (field.precision ?? 0) > 6 || (field.min !== undefined && field.max !== undefined && field.min > field.max))) { message.error(`字段“${field.label || '未命名'}”的数值范围或小数位无效`); step.value = 1; return false }
     const columnIds = new Set<string>()
     for (const column of field.columns ?? []) {
       if (!column.id || columnIds.has(column.id)) { message.error('明细列标识不能为空或重复'); step.value = 1; return false }
       columnIds.add(column.id)
+      if (!column.label) { message.error('明细列名称不能为空'); step.value = 1; return false }
+      if (column.type === 'select') { const options = column.options ?? []; if (!options.length || options.some((option) => !option) || new Set(options).size !== options.length) { message.error(`明细列“${column.label}”的选项不能为空或重复`); step.value = 1; return false } }
+      if (['number', 'money'].includes(column.type) && (!Number.isInteger(column.precision ?? 0) || (column.precision ?? 0) < 0 || (column.precision ?? 0) > 6 || (column.min !== undefined && column.max !== undefined && column.min > column.max))) { message.error(`明细列“${column.label}”的数值范围或小数位无效`); step.value = 1; return false }
     }
   }
   return true
@@ -89,5 +109,5 @@ watch(() => route.params.id, () => { void load() })
 
 <style scoped>
 .editor-page { max-width: 1440px; } .editor-shell { display: grid; gap: 20px; padding: 20px; border: 1px solid #f0f0f0; background: #fff; } .stage { min-width: 0; } .basic-stage { max-width: 720px; } .basic-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; } .basic-form :deep(.ant-form-item:last-child) { grid-column: 1 / -1; } .placeholder { min-height: 380px; display: grid; place-items: center; background: #fafafa; } .editor-footer { display: flex; align-items: center; gap: 8px; padding-top: 4px; border-top: 1px solid #f0f0f0; } .footer-fill { flex: 1; }
-@media (max-width: 760px) { .editor-page { padding: 0; } .editor-shell { padding: 14px; border-left: 0; border-right: 0; } .basic-form { grid-template-columns: 1fr; } .editor-footer { position: sticky; bottom: 0; padding: 10px 0; background: #fff; } }
+@media (max-width: 760px) { .editor-page { padding: 0; } .editor-shell { padding: 14px; border-left: 0; border-right: 0; } .basic-form { grid-template-columns: 1fr; } .editor-footer { position: static; padding: 14px 0 0; background: #fff; flex-wrap: wrap; } }
 </style>
