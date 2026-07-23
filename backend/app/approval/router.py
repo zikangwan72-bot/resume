@@ -1,12 +1,16 @@
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import desc, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.approval.database import get_approval_db
+from app.approval.engine import resolve_execution_path
 from app.approval.models import (
     ApprovalAction,
     ApprovalNode,
@@ -15,7 +19,10 @@ from app.approval.models import (
     ApprovalUser,
     FlowTemplate,
     FormTemplate,
+    ProcessApp,
+    ProcessVersion,
 )
+from app.approval.serializers import serialize_process_app
 from app.core.security import require_permission
 from app.db.models import User
 
@@ -26,9 +33,17 @@ router = APIRouter(prefix="/api/v1/approvals", tags=["approvals"])
 
 
 class SubmitRequest(BaseModel):
-    type_id: int
+    process_app_id: int | None = None
+    type_id: int | None = None
     title: str
     form_data: dict
+    idempotency_key: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def require_a_submission_target(self) -> "SubmitRequest":
+        if self.process_app_id is None and self.type_id is None:
+            raise ValueError("process_app_id is required")
+        return self
 
 
 class ApproveRejectBody(BaseModel):
@@ -118,10 +133,15 @@ def _request_detail(request: ApprovalRequest, db: Session) -> dict:
     return {
         "id": request.id,
         "type_id": request.type_id,
+        "process_app_id": request.process_app_id,
+        "process_version_id": request.process_version_id,
         "applicant_id": request.applicant_id,
         "applicant_name": request.applicant_name,
+        "applicant_snapshot": request.applicant_snapshot,
         "title": request.title,
         "form_data": request.form_data,
+        "form_schema_snapshot": request.form_schema_snapshot,
+        "idempotency_key": request.idempotency_key,
         "status": request.status,
         "current_node_index": request.current_node_index,
         "flow_snapshot": request.flow_snapshot,
@@ -129,6 +149,8 @@ def _request_detail(request: ApprovalRequest, db: Session) -> dict:
             {
                 "id": n.id,
                 "node_index": n.node_index,
+                "node_key": n.node_key,
+                "timeout_hours": n.timeout_hours,
                 "approver_id": n.approver_id,
                 "approver_name": n.approver_name,
                 "status": n.status,
@@ -156,6 +178,118 @@ def _request_detail(request: ApprovalRequest, db: Session) -> dict:
     }
 
 
+def _is_empty_value(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip()) or value == []
+
+
+def _form_data_error(message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail={"code": "invalid_form_data", "message": message},
+    )
+
+
+def _validate_form_data(form_data: dict, form_schema: dict) -> None:
+    fields = form_schema.get("fields") if isinstance(form_schema, dict) else None
+    if not isinstance(fields, list):
+        raise _form_data_error("流程表单定义无效")
+    for field in fields:
+        if not isinstance(field, dict):
+            raise _form_data_error("流程表单定义无效")
+        field_id = field.get("id", field.get("key"))
+        field_type = field.get("type")
+        if not isinstance(field_id, str) or not field_id.strip() or field_type == "section":
+            continue
+        value = form_data.get(field_id)
+        label = field.get("label", field_id)
+        if field.get("required") and _is_empty_value(value):
+            raise _form_data_error(f"请填写：{label}")
+        if _is_empty_value(value):
+            continue
+        if field_type in {"number", "money"} and (
+            isinstance(value, bool) or not isinstance(value, int | float)
+        ):
+            raise _form_data_error(f"{label}必须是数字")
+        if field_type in {
+            "text",
+            "textarea",
+            "date",
+            "user",
+            "department",
+            "attachment",
+        } and not isinstance(value, str):
+            raise _form_data_error(f"{label}格式不正确")
+        if field_type in {"radio", "select"}:
+            options = field.get("options")
+            if options is not None and (not isinstance(options, list) or value not in options):
+                raise _form_data_error(f"{label}选项无效")
+
+
+def _is_countersign_node(node: dict) -> bool:
+    return node.get("type") in {"countersign", "counter_sign"} or node.get(
+        "approval_type"
+    ) == "counter_sign"
+
+
+def _snapshot_flow(path: list[dict]) -> list[dict]:
+    return [{**deepcopy(node), "index": index} for index, node in enumerate(path)]
+
+
+def _add_runtime_nodes(
+    db: Session, request: ApprovalRequest, flow_snapshot: list[dict]
+) -> None:
+    for node_def in flow_snapshot:
+        approver_ids = (
+            node_def.get("approver_ids", [])
+            if _is_countersign_node(node_def)
+            else [node_def.get("approver_id")]
+        )
+        if not isinstance(approver_ids, list) or not approver_ids:
+            raise HTTPException(status_code=400, detail="流程审批人配置无效")
+        for approver_id in approver_ids:
+            if not isinstance(approver_id, str):
+                raise HTTPException(status_code=400, detail="流程审批人配置无效")
+            approver = db.get(ApprovalUser, approver_id)
+            if approver is None or not approver.is_active:
+                raise HTTPException(status_code=400, detail="流程审批人不存在或已停用")
+            db.add(
+                ApprovalNode(
+                    request_id=request.id,
+                    node_index=node_def["index"],
+                    node_key=node_def.get("id"),
+                    timeout_hours=node_def.get("timeout_hours", 0) or 0,
+                    approver_id=approver.id,
+                    approver_name=approver.display_name,
+                    status="pending",
+                )
+            )
+
+
+def _published_version(db: Session, process_app_id: int) -> tuple[ProcessApp, ProcessVersion]:
+    app = db.get(ProcessApp, process_app_id)
+    if app is None or app.status != "published" or app.current_version_id is None:
+        raise HTTPException(status_code=400, detail="流程应用不存在、未发布或已停用")
+    version = db.get(ProcessVersion, app.current_version_id)
+    if (
+        version is None
+        or version.process_app_id != app.id
+        or version.status != "published"
+    ):
+        raise HTTPException(status_code=400, detail="流程应用的已发布版本不可用")
+    return app, version
+
+
+def _existing_idempotent_request(
+    db: Session, applicant_id: str, idempotency_key: str
+) -> ApprovalRequest | None:
+    return db.scalar(
+        select(ApprovalRequest).where(
+            ApprovalRequest.applicant_id == applicant_id,
+            ApprovalRequest.idempotency_key == idempotency_key,
+        )
+    )
+
+
 # ── Endpoints ──
 
 
@@ -168,12 +302,106 @@ def list_types(
     return {"data": [_type_with_form(r, db) for r in rows]}
 
 
-@router.post("/requests")
+@router.get("/apps")
+def list_apps(
+    user: User = Depends(require_permission("approval:view")),
+    db: Session = Depends(get_approval_db),
+) -> dict[str, Any]:
+    apps = db.scalars(
+        select(ProcessApp)
+        .where(ProcessApp.status == "published")
+        .order_by(ProcessApp.name, ProcessApp.id)
+    ).all()
+    result = []
+    for app in apps:
+        if app.current_version_id is None:
+            continue
+        version = db.get(ProcessVersion, app.current_version_id)
+        if version and version.process_app_id == app.id and version.status == "published":
+            result.append(serialize_process_app(app, version))
+    return {"data": result}
+
+
+@router.post("/requests", status_code=status.HTTP_201_CREATED)
 def submit_request(
     body: SubmitRequest,
     user: User = Depends(require_permission("approval:view")),
     db: Session = Depends(get_approval_db),
 ) -> dict[str, Any]:
+    if body.process_app_id is not None:
+        return _submit_process_app_request(body, user, db)
+    return _submit_legacy_request(body, user, db)
+
+
+def _submit_process_app_request(
+    body: SubmitRequest, user: User, db: Session
+) -> dict[str, Any]:
+    if not body.idempotency_key or not body.idempotency_key.strip():
+        raise _form_data_error("幂等键不能为空")
+    if not body.title.strip():
+        raise _form_data_error("申请标题不能为空")
+
+    existing = _existing_idempotent_request(db, user.id, body.idempotency_key)
+    if existing is not None:
+        return JSONResponse(content={"data": _request_detail(existing, db)}, status_code=200)
+
+    app, version = _published_version(db, body.process_app_id)
+    _validate_form_data(body.form_data, version.form_schema)
+    try:
+        resolved_path = resolve_execution_path(body.form_data, version.flow_schema)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"流程定义不可执行：{exc}") from exc
+    if not resolved_path:
+        raise HTTPException(status_code=400, detail="流程没有可执行的审批节点")
+
+    applicant = db.get(ApprovalUser, user.id)
+    if applicant is None or not applicant.is_active:
+        raise HTTPException(status_code=400, detail="申请人不存在或已停用")
+
+    now = datetime.now(UTC)
+    flow_snapshot = _snapshot_flow(resolved_path)
+    request = ApprovalRequest(
+        process_app_id=app.id,
+        process_version_id=version.id,
+        applicant_id=applicant.id,
+        applicant_name=applicant.display_name,
+        applicant_snapshot={
+            "id": applicant.id,
+            "display_name": applicant.display_name,
+            "department": applicant.department,
+            "position": applicant.position,
+        },
+        title=body.title.strip(),
+        form_data=deepcopy(body.form_data),
+        form_schema_snapshot=deepcopy(version.form_schema),
+        idempotency_key=body.idempotency_key,
+        status="pending",
+        current_node_index=0,
+        flow_snapshot=flow_snapshot,
+        submitted_at=now,
+        updated_at=now,
+    )
+    db.add(request)
+    try:
+        db.flush()
+        _add_runtime_nodes(db, request, flow_snapshot)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        existing = _existing_idempotent_request(db, user.id, body.idempotency_key)
+        if existing is not None:
+            return JSONResponse(content={"data": _request_detail(existing, db)}, status_code=200)
+        raise HTTPException(status_code=409, detail="审批申请创建冲突，请重试") from exc
+    except HTTPException:
+        db.rollback()
+        raise
+    db.refresh(request)
+    return {"data": _request_detail(request, db)}
+
+
+def _submit_legacy_request(body: SubmitRequest, user: User, db: Session) -> dict[str, Any]:
+    if body.type_id is None:
+        raise HTTPException(status_code=422, detail="缺少流程应用")
     approval_type = db.get(ApprovalType, body.type_id)
     if not approval_type or not approval_type.is_active:
         raise HTTPException(status_code=400, detail="审批类型不存在或已停用")
@@ -350,7 +578,7 @@ def reject_node(
 
     # Check if this is a counter-sign node
     is_counter_sign = any(
-        n.get("type") == "counter_sign" and n["index"] == node.node_index
+        _is_countersign_node(n) and n["index"] == node.node_index
         for n in request.flow_snapshot
     )
 
