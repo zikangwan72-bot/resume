@@ -47,3 +47,22 @@ def serialize_process_app(app: ProcessApp, version: ProcessVersion) -> dict[str,
         "created_at": app.created_at.isoformat(),
         "updated_at": app.updated_at.isoformat(),
     }
+
+
+def serialize_process_app_list(
+    app: ProcessApp,
+    current_version: ProcessVersion | None,
+    draft_version: ProcessVersion | None,
+) -> dict[str, Any]:
+    version = current_version or draft_version
+    if version is None:
+        raise ValueError("流程应用缺少流程版本")
+    data = serialize_process_app(app, version)
+    if current_version is None:
+        data["version_id"] = None
+        data["version_number"] = None
+        data["version_status"] = None
+        data["published_at"] = None
+    data["draft_version_number"] = draft_version.version_number if draft_version else None
+    data["has_draft"] = draft_version is not None
+    return data

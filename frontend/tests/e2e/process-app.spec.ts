@@ -28,6 +28,8 @@ type MockProcessApp = {
   version_number: number
   version_status: 'draft' | 'published'
   current_version_id: number
+  draft_version_number?: number | null
+  has_draft?: boolean
   field_count: number
   approval_node_count: number
   form_schema: { fields: unknown[] }
@@ -39,12 +41,17 @@ type MockProcessApp = {
 
 const seededProcessApps: MockProcessApp[] = [
   { id: 1, code: 'leave', name: '请假申请', category: '人事', description: '员工请假流程', status: 'published', version_id: 11, version_number: 1, version_status: 'published', current_version_id: 11, field_count: 4, approval_node_count: 1, form_schema: { fields: [] }, flow_schema: { nodes: [], edges: [] }, published_at: '2026-07-20T08:00:00Z', created_at: '2026-07-20T08:00:00Z', updated_at: '2026-07-23T08:00:00Z' },
-  { id: 2, code: 'expense', name: '报销申请', category: '财务', description: '费用报销流程', status: 'draft', version_id: 12, version_number: 2, version_status: 'draft', current_version_id: 12, field_count: 7, approval_node_count: 2, form_schema: { fields: [] }, flow_schema: { nodes: [], edges: [] }, published_at: null, created_at: '2026-07-19T08:00:00Z', updated_at: '2026-07-22T08:00:00Z' },
+  { id: 2, code: 'expense', name: '报销申请', category: '财务', description: '费用报销流程', status: 'published', version_id: 10, version_number: 1, version_status: 'published', current_version_id: 10, draft_version_number: 2, has_draft: true, field_count: 6, approval_node_count: 2, form_schema: { fields: [] }, flow_schema: { nodes: [], edges: [] }, published_at: '2026-07-19T08:00:00Z', created_at: '2026-07-19T08:00:00Z', updated_at: '2026-07-22T08:00:00Z' },
   { id: 3, code: 'purchase', name: '采购申请', category: '采购', description: '采购审批流程', status: 'published', version_id: 13, version_number: 1, version_status: 'published', current_version_id: 13, field_count: 6, approval_node_count: 2, form_schema: { fields: [] }, flow_schema: { nodes: [], edges: [] }, published_at: '2026-07-18T08:00:00Z', created_at: '2026-07-18T08:00:00Z', updated_at: '2026-07-21T08:00:00Z' },
 ]
 
 async function loginAsAdmin(page: Page) {
   await page.goto('/login')
+  await page.evaluate(() => {
+    localStorage.removeItem('enterprise_ai_token')
+    localStorage.removeItem('enterprise_ai_user')
+  })
+  await page.reload()
   await page.getByRole('button', { name: /平台管理员/ }).click()
   await page.getByRole('button', { name: /安全进入/ }).click()
   await expect(page).toHaveURL(/dashboard/)
@@ -90,7 +97,7 @@ async function setupUserApi(page: Page, initialUsers = seededUsers) {
   }
 }
 
-async function setupProcessAppApi(page: Page, initialApps = seededProcessApps) {
+async function setupProcessAppApi(page: Page, initialApps = seededProcessApps, actionErrors: { copy?: boolean; deactivate?: boolean } = {}) {
   const apps = initialApps.map((app) => ({ ...app }))
   let getAttempts = 0
   await page.route('**/api/v1/admin/process-apps**', async (route) => {
@@ -103,11 +110,13 @@ async function setupProcessAppApi(page: Page, initialApps = seededProcessApps) {
     const app = apps.find((item) => item.id === id)
     if (!app) return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ detail: '流程应用不存在' }) })
     if (method === 'POST' && route.request().url().endsWith('/copy')) {
+      if (actionErrors.copy) return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: '复制失败' }) })
       const copy = { ...app, id: apps.length + 10, code: `${app.code}-copy`, name: `${app.name}（副本）`, status: 'draft' as const, version_id: apps.length + 20, current_version_id: apps.length + 20, version_status: 'draft' as const, updated_at: '2026-07-23T12:00:00Z' }
       apps.push(copy)
       return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: copy }) })
     }
     if (method === 'POST' && route.request().url().endsWith('/deactivate')) {
+      if (actionErrors.deactivate) return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: '停用失败' }) })
       app.status = 'inactive'
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: app }) })
     }
@@ -234,6 +243,8 @@ test('lists seeded process apps with filters and lifecycle actions', async ({ pa
   await expect(page.getByText('采购申请')).toBeVisible()
   await expect(page.getByRole('columnheader', { name: '字段数' })).toBeVisible()
   await expect(page.getByRole('table').getByText('已发布', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('row', { name: /报销申请/ })).toContainText('v1')
+  await expect(page.getByRole('row', { name: /报销申请/ })).toContainText('有草稿')
 
   await page.getByRole('textbox', { name: '搜索流程应用' }).fill('报销')
   await expect(page.getByRole('row', { name: /报销申请/ })).toBeVisible()
@@ -248,7 +259,7 @@ test('lists seeded process apps with filters and lifecycle actions', async ({ pa
   await page.getByText('全部分类', { exact: true }).last().click()
   await page.getByRole('textbox', { name: '搜索流程应用' }).fill('采购')
   await page.getByRole('row', { name: /采购申请/ }).getByRole('button', { name: '更多操作' }).click()
-  await page.getByRole('menuitem', { name: '停用' }).click()
+  await page.locator('.ant-dropdown:not(.ant-dropdown-hidden)').getByRole('menuitem', { name: '停用' }).last().click()
   await expect(page.getByText('停用流程应用？')).toBeVisible()
   await page.getByRole('button', { name: /停\s*用/ }).last().click()
   await expect(page.getByRole('row', { name: /采购申请/ }).getByText('已停用')).toBeVisible()
@@ -262,6 +273,18 @@ test('lists seeded process apps with filters and lifecycle actions', async ({ pa
 
 test('renders process app loading, retry, empty, and lifecycle API errors', async ({ page }) => {
   let attempts = 0
+  let release: (() => void) | undefined
+  await loginAsAdmin(page)
+  await page.route('**/api/v1/admin/process-apps**', async (route) => {
+    await new Promise<void>((resolve) => { release = resolve })
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: seededProcessApps }) })
+  })
+  const navigation = page.goto('/admin/process-apps')
+  await expect(page.locator('.ant-skeleton')).toBeVisible()
+  release?.()
+  await navigation
+  await expect(page.getByText('请假申请')).toBeVisible()
+  await page.unroute('**/api/v1/admin/process-apps**')
   await page.route('**/api/v1/admin/process-apps**', async (route) => {
     attempts += 1
     if (attempts === 1) return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: '服务异常' }) })
@@ -272,4 +295,44 @@ test('renders process app loading, retry, empty, and lifecycle API errors', asyn
   await expect(page.getByText('流程应用列表加载失败')).toBeVisible()
   await page.getByRole('button', { name: /重\s*试/ }).click()
   await expect(page.getByText('暂无流程应用')).toBeVisible()
+})
+
+test('keeps the process-app table usable on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await setupProcessAppApi(page)
+  await loginAsAdmin(page)
+  await page.goto('/admin/process-apps')
+  await expect(page.getByRole('table')).toBeVisible()
+})
+
+test('supports preview and future new/edit routes and reports lifecycle errors', async ({ page }) => {
+  await setupProcessAppApi(page, seededProcessApps, { copy: true, deactivate: true })
+  await loginAsAdmin(page)
+  await page.route('**/api/v1/admin/logs', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
+  })
+  await expect(page.getByText('审批日志', { exact: true })).toBeVisible()
+  await expect(page.getByText('审批类型', { exact: true })).toHaveCount(0)
+  await page.goto('/admin/approval-logs')
+  await expect(page.getByRole('heading', { name: '审批日志' })).toBeVisible()
+  await page.goto('/admin/process-apps')
+  await page.getByRole('row', { name: /请假申请/ }).getByRole('button', { name: '更多操作' }).click()
+  await page.getByRole('menuitem', { name: '预览' }).click()
+  await expect(page.getByRole('dialog', { name: /请假申请.*预览/ })).toBeVisible()
+  await page.locator('.ant-modal-close').click()
+  await page.getByRole('button', { name: /新建流程应用/ }).click()
+  await expect(page).toHaveURL('/admin/process-apps/new')
+  await page.goto('/admin/process-apps')
+  await page.getByRole('row', { name: /请假申请/ }).getByRole('button', { name: '更多操作' }).click()
+  await page.getByRole('menuitem', { name: '编辑' }).click()
+  await expect(page).toHaveURL('/admin/process-apps/1/edit')
+  await page.goto('/admin/process-apps')
+  await page.getByRole('row', { name: /请假申请/ }).getByRole('button', { name: '更多操作' }).click()
+  await page.getByRole('menuitem', { name: '复制' }).click()
+  await expect(page.getByText('复制失败')).toBeVisible()
+  await page.getByRole('row', { name: /采购申请/ }).getByRole('button', { name: '更多操作' }).click()
+  await page.locator('.ant-dropdown:not(.ant-dropdown-hidden)').getByRole('menuitem', { name: '停用' }).last().click()
+  await expect(page.getByText('停用流程应用？')).toBeVisible()
+  await page.getByRole('button', { name: /停\s*用/ }).last().click()
+  await expect(page.getByText('停用失败')).toBeVisible()
 })

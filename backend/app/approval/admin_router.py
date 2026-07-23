@@ -27,6 +27,7 @@ from app.approval.serializers import (
     serialize_approval_user,
     serialize_definition_error,
     serialize_process_app,
+    serialize_process_app_list,
 )
 from app.core.security import require_permission
 from app.db.models import User
@@ -61,6 +62,21 @@ def _editable_version(db: Session, app: ProcessApp) -> ProcessVersion:
     if versions:
         return versions[0]
     raise HTTPException(status_code=500, detail="流程版本数据异常")
+
+
+def _current_published_version(db: Session, app: ProcessApp) -> ProcessVersion | None:
+    if app.current_version_id is not None:
+        current_version = db.get(ProcessVersion, app.current_version_id)
+        if current_version is not None and current_version.status == "published":
+            return current_version
+    return db.scalar(
+        select(ProcessVersion)
+        .where(
+            ProcessVersion.process_app_id == app.id,
+            ProcessVersion.status == "published",
+        )
+        .order_by(desc(ProcessVersion.version_number))
+    )
 
 
 def _active_user_ids(db: Session) -> set[str]:
@@ -413,7 +429,16 @@ def list_process_apps(
     db: Session = Depends(get_approval_db),
 ) -> dict:
     apps = db.scalars(select(ProcessApp).order_by(desc(ProcessApp.updated_at))).all()
-    return {"data": [serialize_process_app(app, _editable_version(db, app)) for app in apps]}
+    return {
+        "data": [
+            serialize_process_app_list(
+                app,
+                _current_published_version(db, app),
+                _editable_version(db, app),
+            )
+            for app in apps
+        ]
+    }
 
 
 @admin_router.post("/process-apps", status_code=status.HTTP_201_CREATED)

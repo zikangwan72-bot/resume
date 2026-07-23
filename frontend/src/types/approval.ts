@@ -96,9 +96,11 @@ export interface ProcessApp {
   description: string | null
   status: ProcessAppStatus
   version_id: number
-  version_number: number
-  version_status: ProcessVersionStatus
+  version_number: number | null
+  version_status: ProcessVersionStatus | null
   current_version_id: number | null
+  draft_version_number: number | null
+  has_draft: boolean
   field_count: number
   approval_node_count: number
   form_schema: FormSchema

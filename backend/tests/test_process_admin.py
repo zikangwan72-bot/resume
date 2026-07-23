@@ -281,6 +281,41 @@ def test_editing_an_inactive_app_creates_draft_v2_and_preserves_v1_after_republi
     ]
 
 
+def test_process_app_list_uses_current_published_version_and_exposes_draft(
+    client, admin_headers, valid_definition
+):
+    created = _create_process_app(client, admin_headers, valid_definition)
+    app_id = created["id"]
+    published = client.post(
+        f"/api/v1/admin/process-apps/{app_id}/publish", headers=admin_headers
+    )
+    assert published.status_code == 200
+
+    updated = client.put(
+        f"/api/v1/admin/process-apps/{app_id}",
+        headers=admin_headers,
+        json={
+            "form_schema": {
+                "fields": [
+                    *valid_definition["form_schema"]["fields"],
+                    {"id": "destination", "label": "目的地", "type": "text"},
+                ]
+            }
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["data"]["version_status"] == "draft"
+
+    listed = client.get("/api/v1/admin/process-apps", headers=admin_headers)
+    assert listed.status_code == 200
+    item = next(row for row in listed.json()["data"] if row["id"] == app_id)
+    assert item["version_id"] == published.json()["data"]["version_id"]
+    assert item["version_number"] == 1
+    assert item["version_status"] == "published"
+    assert item["draft_version_number"] == 2
+    assert item["has_draft"] is True
+
+
 def test_process_admin_database_constraints_are_declared():
     constraints = inspect(approval_engine).get_unique_constraints("approval_users")
     assert any(constraint["column_names"] == ["email"] for constraint in constraints)

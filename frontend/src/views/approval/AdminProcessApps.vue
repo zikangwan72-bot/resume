@@ -143,7 +143,7 @@ onMounted(loadApps)
           <a-table-column title="分类" data-index="category" :width="120" />
           <a-table-column title="字段数" data-index="field_count" :width="90" />
           <a-table-column title="审批节点数" data-index="approval_node_count" :width="120" />
-          <a-table-column title="当前版本" :width="100"><template #default="{ record }">v{{ record.version_number }}</template></a-table-column>
+          <a-table-column title="当前版本" :width="130"><template #default="{ record }"><span>{{ record.version_number ? 'v' + record.version_number : '暂无发布版本' }}</span><a-tag v-if="record.has_draft" color="warning" class="draft-tag">有草稿</a-tag></template></a-table-column>
           <a-table-column title="状态" :width="110"><template #default="{ record }"><ProcessStatusTag :status="record.status" /></template></a-table-column>
           <a-table-column title="更新时间" :width="170"><template #default="{ record }">{{ formatDate(record.updated_at) }}</template></a-table-column>
           <a-table-column title="操作" fixed="right" :width="96">
