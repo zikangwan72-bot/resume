@@ -235,8 +235,27 @@ def _validate_field_value(field: dict, value: object, field_id: str) -> None:
 
 def _validate_option(value: object, field: dict, field_id: str, label: object) -> None:
     options = field.get("options")
-    if options is not None and (not isinstance(options, list) or value not in options):
+    if not _valid_choice_options(options):
+        raise _form_data_error(f"{label}选项配置无效", field_id)
+    if not any(type(value) is type(option) and value == option for option in options):
         raise _form_data_error(f"{label}选项无效", field_id)
+
+
+def _valid_choice_options(options: object) -> bool:
+    if not isinstance(options, list) or not options:
+        return False
+
+    seen: set[tuple[type, object]] = set()
+    for option in options:
+        if not isinstance(option, str | int | float | bool):
+            return False
+        if isinstance(option, str) and not option.strip():
+            return False
+        key = (type(option), option)
+        if key in seen:
+            return False
+        seen.add(key)
+    return True
 
 
 def _validate_date(value: object, field_id: str, label: object) -> date:
@@ -300,11 +319,20 @@ def _flow_node_at_index(request: ApprovalRequest, node_index: int) -> dict | Non
 
 
 def _consume_pending_node(
-    db: Session, node: ApprovalNode, status_value: str, comment: str, now: datetime
+    db: Session,
+    node: ApprovalNode,
+    expected_approver_id: int,
+    status_value: str,
+    comment: str,
+    now: datetime,
 ) -> bool:
     result = db.execute(
         update(ApprovalNode)
-        .where(ApprovalNode.id == node.id, ApprovalNode.status == "pending")
+        .where(
+            ApprovalNode.id == node.id,
+            ApprovalNode.status == "pending",
+            ApprovalNode.approver_id == expected_approver_id,
+        )
         .values(status=status_value, comment=comment, acted_at=now)
     )
     return result.rowcount == 1
@@ -591,7 +619,7 @@ def approve_node(
     request = _current_request_for_node(db, node)
 
     now = datetime.now(UTC)
-    if not _consume_pending_node(db, node, "approved", body.comment, now):
+    if not _consume_pending_node(db, node, user.id, "approved", body.comment, now):
         db.rollback()
         raise HTTPException(status_code=400, detail="该节点已被处理，不可重复操作")
 
@@ -663,7 +691,7 @@ def reject_node(
 
     now = datetime.now(UTC)
     request = _current_request_for_node(db, node)
-    if not _consume_pending_node(db, node, "rejected", body.comment, now):
+    if not _consume_pending_node(db, node, user.id, "rejected", body.comment, now):
         db.rollback()
         raise HTTPException(status_code=400, detail="该节点已被处理，不可重复操作")
 

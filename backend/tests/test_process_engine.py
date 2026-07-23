@@ -105,6 +105,32 @@ def test_default_branch_is_required():
 
 
 @pytest.mark.parametrize(
+    "field",
+    [
+        {"id": "choice", "type": "select"},
+        {"id": "choice", "type": "radio", "options": []},
+        {"id": "choice", "type": "checkbox", "options": ["a", "a"]},
+        {"id": "choice", "type": "select", "options": [{"value": "a"}]},
+    ],
+)
+def test_validator_requires_valid_nonempty_choice_options(field):
+    form_schema = {"fields": [*FORM_SCHEMA["fields"], field]}
+
+    assert "invalid_choice_options" in _error_codes(form_schema, FLOW_WITH_AMOUNT_BRANCH)
+
+
+def test_validator_accepts_unique_scalar_choice_options():
+    form_schema = {
+        "fields": [
+            *FORM_SCHEMA["fields"],
+            {"id": "choice", "type": "checkbox", "options": ["a", 1, True]},
+        ]
+    }
+
+    assert "invalid_choice_options" not in _error_codes(form_schema, FLOW_WITH_AMOUNT_BRANCH)
+
+
+@pytest.mark.parametrize(
     ("form_schema", "flow_schema", "expected_code"),
     [
         (

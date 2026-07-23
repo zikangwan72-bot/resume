@@ -165,8 +165,35 @@ def _validate_fields(
         if not isinstance(field_type, str) or field_type not in FIELD_TYPES:
             errors.append(_error("invalid_field_type", "表单字段类型不受支持", field_id))
             continue
+        if field_type in {"radio", "select", "checkbox"} and not _valid_choice_options(
+            field.get("options")
+        ):
+            errors.append(
+                _error(
+                    "invalid_choice_options",
+                    "选择字段必须配置非空、不重复的标量选项",
+                    field_id,
+                )
+            )
         field_types[field_id] = field_type
     return field_types
+
+
+def _valid_choice_options(options: object) -> bool:
+    if not isinstance(options, list) or not options:
+        return False
+
+    seen: set[tuple[type, object]] = set()
+    for option in options:
+        if not isinstance(option, str | int | float | bool):
+            return False
+        if isinstance(option, str) and not option.strip():
+            return False
+        key = (type(option), option)
+        if key in seen:
+            return False
+        seen.add(key)
+    return True
 
 
 def _validate_nodes(

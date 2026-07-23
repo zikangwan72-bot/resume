@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from threading import Barrier
+from threading import Barrier, Event
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -513,10 +513,15 @@ def test_submit_rejects_invalid_top_level_field_types(client, admin_headers, for
     assert response.json()["detail"]["field_id"] == field_id
 
 
-def test_submit_rejects_malformed_options_shape_with_field_detail(client, admin_headers):
-    definition = _top_level_types_definition()
-    definition["form_schema"]["fields"][2]["options"] = "high"
-    app = _create_and_publish_app(client, admin_headers, definition)
+def test_submit_rejects_malformed_options_shape_with_field_detail(
+    client, admin_headers, db_session
+):
+    app = _create_and_publish_app(client, admin_headers, _top_level_types_definition())
+    version = db_session.get(ProcessVersion, app["version_id"])
+    schema = deepcopy(version.form_schema)
+    schema["fields"][2]["options"] = "high"
+    version.form_schema = schema
+    db_session.commit()
 
     response = client.post(
         "/api/v1/approvals/requests",
@@ -526,6 +531,31 @@ def test_submit_rejects_malformed_options_shape_with_field_detail(client, admin_
             "title": "选项形状校验",
             "form_data": _top_level_types_data(),
             "idempotency_key": "malformed-options",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["field_id"] == "priority"
+
+
+def test_submit_rejects_missing_choice_options_in_a_published_snapshot(
+    client, admin_headers, db_session
+):
+    app = _create_and_publish_app(client, admin_headers, _top_level_types_definition())
+    version = db_session.get(ProcessVersion, app["version_id"])
+    schema = deepcopy(version.form_schema)
+    schema["fields"][2].pop("options")
+    version.form_schema = schema
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/approvals/requests",
+        headers=admin_headers,
+        json={
+            "process_app_id": app["id"],
+            "title": "历史选项缺失",
+            "form_data": _top_level_types_data(),
+            "idempotency_key": "missing-options",
         },
     )
 
@@ -674,9 +704,9 @@ def test_concurrent_approvals_consume_once_and_countersign_advances_once(
     def concurrent_approvals(node_user_pairs):
         barrier = Barrier(len(node_user_pairs))
 
-        def synchronized_consume(db, node, status_value, comment, now):
+        def synchronized_consume(db, node, *args):
             barrier.wait(timeout=5)
-            return original_consume(db, node, status_value, comment, now)
+            return original_consume(db, node, *args)
 
         monkeypatch.setattr(approval_router, "_consume_pending_node", synchronized_consume)
 
@@ -749,6 +779,127 @@ def test_concurrent_approvals_consume_once_and_countersign_advances_once(
     ).json()["data"]
     assert current["status"] == "pending"
     assert current["current_node_index"] == 2
+
+
+@pytest.mark.parametrize("action", ["approve", "reject"])
+def test_transfer_race_prevents_stale_approver_from_consuming_reassigned_node(
+    client, admin_headers, monkeypatch, action
+):
+    definition = _single_step_definition()
+    definition["flow_schema"]["nodes"][1]["allow_transfer"] = True
+    app_data = _create_and_publish_app(client, admin_headers, definition)
+    request = client.post(
+        "/api/v1/approvals/requests",
+        headers=admin_headers,
+        json=_submit_body(app_data["id"], key=f"transfer-race-{action}"),
+    ).json()["data"]
+    node_id = request["nodes"][0]["id"]
+    old_action_ready = Event()
+    release_old_action = Event()
+    original_consume = approval_router._consume_pending_node
+
+    def paused_consume(db, node, *args):
+        old_action_ready.set()
+        assert release_old_action.wait(timeout=5)
+        return original_consume(db, node, *args)
+
+    monkeypatch.setattr(approval_router, "_consume_pending_node", paused_consume)
+
+    def stale_action():
+        with ApprovalSessionLocal() as db:
+            try:
+                handler = (
+                    approval_router.approve_node
+                    if action == "approve"
+                    else approval_router.reject_node
+                )
+                handler(
+                    node_id,
+                    approval_router.ApproveRejectBody(comment="处理意见"),
+                    SimpleNamespace(id=PRODUCT_USER_ID, display_name="产品演示用户"),
+                    db,
+                )
+                return 200
+            except HTTPException as exc:
+                db.rollback()
+                return exc.status_code
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        stale_future = executor.submit(stale_action)
+        assert old_action_ready.wait(timeout=5)
+        with ApprovalSessionLocal() as db:
+            transferred = approval_router.transfer_node(
+                node_id,
+                approval_router.TransferBody(target_user_id=DIRECTOR_USER_ID),
+                SimpleNamespace(id=PRODUCT_USER_ID, display_name="产品演示用户"),
+                db,
+            )
+            assert transferred["data"]["nodes"][0]["approver_id"] == DIRECTOR_USER_ID
+        release_old_action.set()
+        stale_status = stale_future.result(timeout=10)
+
+    assert stale_status == 400
+    response = client.get(
+        f"/api/v1/approvals/requests/{request['id']}", headers=admin_headers
+    )
+    detail = response.json()["data"]
+    assert detail["status"] == "pending"
+    assert detail["nodes"][0]["approver_id"] == DIRECTOR_USER_ID
+    assert detail["nodes"][0]["status"] == "pending"
+    assert [item["action"] for item in detail["actions"]] == ["transfer"]
+
+
+def test_revoke_racing_terminal_approval_preserves_revoked_status(
+    client, admin_headers, monkeypatch
+):
+    app_data = _create_and_publish_app(client, admin_headers, _single_step_definition())
+    request = client.post(
+        "/api/v1/approvals/requests",
+        headers=admin_headers,
+        json=_submit_body(app_data["id"], key="revoke-approve-race"),
+    ).json()["data"]
+    approval_ready = Event()
+    release_approval = Event()
+    original_consume = approval_router._consume_pending_node
+
+    def paused_consume(db, node, *args):
+        approval_ready.set()
+        assert release_approval.wait(timeout=5)
+        return original_consume(db, node, *args)
+
+    monkeypatch.setattr(approval_router, "_consume_pending_node", paused_consume)
+
+    def approve():
+        with ApprovalSessionLocal() as db:
+            try:
+                approval_router.approve_node(
+                    request["nodes"][0]["id"],
+                    approval_router.ApproveRejectBody(comment="同意"),
+                    SimpleNamespace(id=PRODUCT_USER_ID, display_name="产品演示用户"),
+                    db,
+                )
+                return 200
+            except HTTPException as exc:
+                db.rollback()
+                return exc.status_code
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        approval_future = executor.submit(approve)
+        assert approval_ready.wait(timeout=5)
+        revoked = client.put(
+            f"/api/v1/approvals/requests/{request['id']}/revoke", headers=admin_headers
+        )
+        release_approval.set()
+        approval_status = approval_future.result(timeout=10)
+
+    assert revoked.status_code == 200
+    assert approval_status == 400
+    response = client.get(
+        f"/api/v1/approvals/requests/{request['id']}", headers=admin_headers
+    )
+    detail = response.json()["data"]
+    assert detail["status"] == "revoked"
+    assert [item["action"] for item in detail["actions"]] == ["revoke"]
 
 
 def test_legacy_submission_remains_available(client, admin_headers):
