@@ -49,3 +49,18 @@ backend/.venv/Scripts/python.exe -m pytest backend/tests/test_process_admin.py -
 backend/.venv/Scripts/ruff.exe check backend/app/approval/admin_router.py backend/tests/test_process_admin.py
 All checks passed!
 ```
+
+## Compatibility Fix
+
+- Department filtering now uses a correlated SQL `EXISTS` with `COALESCE(applicant_snapshot.department, ApprovalUser.department)`, covering legacy requests without an applicant snapshot while preserving database count/pagination and request-level uniqueness.
+- Added a legacy request regression test.
+
+Final verification:
+
+```text
+backend/.venv/Scripts/python.exe -m pytest backend/tests/test_process_admin.py -q
+23 passed in 5.38s
+
+backend/.venv/Scripts/ruff.exe check backend/app/approval/admin_router.py backend/tests/test_process_admin.py
+All checks passed!
+```

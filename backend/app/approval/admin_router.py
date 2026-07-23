@@ -300,8 +300,16 @@ def _monitor_requests(
     if submitted_to is not None:
         statement = statement.where(ApprovalRequest.submitted_at <= submitted_to)
     if department:
+        snapshot_department = ApprovalRequest.applicant_snapshot["department"].as_string()
         statement = statement.where(
-            ApprovalRequest.applicant_snapshot["department"].as_string().contains(department)
+            exists(
+                select(ApprovalUser.id).where(
+                    ApprovalUser.id == ApprovalRequest.applicant_id,
+                    func.coalesce(snapshot_department, ApprovalUser.department).contains(
+                        department
+                    ),
+                )
+            )
         )
     if applicant:
         statement = statement.where(ApprovalRequest.applicant_name.contains(applicant))

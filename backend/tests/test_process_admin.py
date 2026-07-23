@@ -530,6 +530,31 @@ def overdue_request(db_session):
     return request
 
 
+@pytest.fixture
+def legacy_request(db_session):
+    process_app = db_session.scalar(select(ProcessApp).where(ProcessApp.code == "expense"))
+    version = db_session.get(ProcessVersion, process_app.current_version_id)
+    applicant = db_session.scalar(
+        select(ApprovalUser).where(ApprovalUser.email == "product@demo.local")
+    )
+    request = ApprovalRequest(
+        process_app_id=process_app.id,
+        process_version_id=version.id,
+        applicant_id=applicant.id,
+        applicant_name=applicant.display_name,
+        applicant_snapshot=None,
+        title="历史采购申请",
+        form_data={"amount": 800},
+        form_schema_snapshot=version.form_schema,
+        status="approved",
+        current_node_index=0,
+        flow_snapshot=[],
+    )
+    db_session.add(request)
+    db_session.commit()
+    return request
+
+
 def test_monitor_filters_pending_requests_and_reports_overdue(
     client, admin_headers, overdue_request
 ):
@@ -628,3 +653,18 @@ def test_monitor_countersign_filter_matches_second_pending_approver(
         "44444444-4444-4444-4444-444444444444",
         overdue_request.applicant_id,
     }
+
+
+def test_monitor_department_filter_falls_back_for_legacy_request(
+    client, admin_headers, legacy_request
+):
+    response = client.get(
+        "/api/v1/admin/process-monitor/requests",
+        params={"department": "产品与流程创新", "page": 1, "page_size": 20},
+        headers=admin_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["total"] == 1
+    assert data["items"][0]["id"] == legacy_request.id
+    assert data["items"][0]["applicant"]["department"] == "产品与流程创新"
