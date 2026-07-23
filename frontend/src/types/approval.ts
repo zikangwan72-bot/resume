@@ -30,14 +30,41 @@ export interface ApprovalUserInput {
 }
 
 export interface FormField {
+  id: string
   key: string
   label: string
   type: 'text' | 'textarea' | 'number' | 'money' | 'date' | 'date_range' | 'radio' | 'checkbox' | 'select' | 'user' | 'department' | 'attachment' | 'section' | 'detail_table'
   required: boolean
   options?: string[]
+  placeholder?: string
+  help?: string
+  min?: number
+  max?: number
+  precision?: number
+  columns?: DetailColumn[]
 }
 
 export interface FormSchema { fields: FormField[] }
+
+export type DetailColumnType = 'text' | 'number' | 'money' | 'date' | 'select'
+
+export interface DetailColumn {
+  id: string
+  label: string
+  type: DetailColumnType
+  required: boolean
+  options?: string[]
+}
+
+export interface ProcessAppDraft {
+  id?: number
+  code: string
+  name: string
+  category: string
+  description: string
+  form_schema: FormSchema
+  flow_schema: FlowSchema
+}
 
 export interface FlowNodeDef {
   id: string

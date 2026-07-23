@@ -63,12 +63,12 @@ const router = createRouter({
         },
         {
           path: 'admin/process-apps/new',
-          component: () => import('@/views/NotFoundView.vue'),
+          component: () => import('@/views/approval/AdminProcessEditor.vue'),
           meta: { title: '新建流程应用', permission: 'approval:manage' },
         },
         {
           path: 'admin/process-apps/:id/edit',
-          component: () => import('@/views/NotFoundView.vue'),
+          component: () => import('@/views/approval/AdminProcessEditor.vue'),
           meta: { title: '编辑流程应用', permission: 'approval:manage' },
         },
         {

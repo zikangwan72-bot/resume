@@ -336,3 +336,88 @@ test('supports preview and future new/edit routes and reports lifecycle errors',
   await page.getByRole('button', { name: /停\s*用/ }).last().click()
   await expect(page.getByText('停用失败')).toBeVisible()
 })
+
+test('creates a draft, designs a form, and preserves stable field identifiers', async ({ page }) => {
+  await setupProcessAppApi(page)
+  let saved = false
+  await page.route('**/api/v1/admin/process-apps', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    saved = true
+    const body = route.request().postDataJSON()
+    return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { ...seededProcessApps[0], ...body, id: 99, version_id: 99, current_version_id: 99, form_schema: body.form_schema } }) })
+  })
+  await loginAsAdmin(page)
+  await page.goto('/admin/process-apps/new')
+
+  await page.getByLabel('流程名称').fill('差旅申请')
+  await page.getByLabel('流程编号').fill('travel')
+  await page.getByRole('button', { name: '下一步' }).click()
+  await page.locator('[data-field-type="money"]').click()
+  await page.getByLabel('字段名称').fill('预计金额')
+  await expect(page.getByText('预计金额', { exact: true })).toBeVisible()
+
+  const field = page.locator('[data-field-id]').last()
+  const firstId = await field.getAttribute('data-field-id')
+  await field.getByRole('button', { name: '复制字段' }).click()
+  const ids = await page.locator('[data-field-id]').evaluateAll((elements) => elements.map((element) => element.getAttribute('data-field-id')))
+  expect(ids).toContain(firstId)
+  expect(new Set(ids).size).toBe(ids.length)
+  await page.locator('[data-field-id]').first().getByRole('button', { name: '下移字段' }).click()
+  await page.locator('[data-field-id]').first().getByRole('button', { name: '删除字段' }).click()
+  await expect(page.locator('[data-field-id]')).toHaveCount(1)
+  await page.screenshot({ path: '../artifacts/task-9-editor-desktop.png', fullPage: true })
+
+  await page.getByRole('button', { name: '上一环节' }).click()
+  await expect(page.getByLabel('流程名称')).toHaveValue('差旅申请')
+  await page.getByRole('button', { name: '下一步' }).click()
+  await expect(page.getByText('预计金额', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '保存草稿' }).click()
+  await expect(page).toHaveURL('/admin/process-apps/99/edit')
+  expect(saved).toBeTruthy()
+})
+
+test('edits an app, configures choices and detail columns, and surfaces save failures', async ({ page }) => {
+  const app = {
+    ...seededProcessApps[0],
+    form_schema: { fields: [{ id: 'reason', key: 'reason', type: 'text', label: '请假事由', required: true }] },
+  }
+  let saveFailed = false
+  await page.route('**/api/v1/admin/process-apps/**', async (route) => {
+    const method = route.request().method()
+    if (method === 'GET') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: app }) })
+    if (method === 'PUT') {
+      saveFailed = true
+      return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ detail: '流程编号已存在' }) })
+    }
+    return route.continue()
+  })
+  await loginAsAdmin(page)
+  await page.goto('/admin/process-apps/1/edit')
+  await expect(page.getByLabel('流程名称')).toHaveValue('请假申请')
+  await page.getByRole('button', { name: '下一步' }).click()
+  await page.locator('[data-field-type="radio"]').click()
+  await page.getByLabel('字段名称').fill('出行方式')
+  await page.getByRole('textbox', { name: '选项' }).fill('飞机')
+  await page.getByRole('button', { name: '添加选项' }).click()
+  await page.locator('[data-field-type="detail_table"]').click()
+  await page.getByLabel('字段名称').fill('费用明细')
+  await page.getByRole('button', { name: '新增明细列' }).click()
+  await page.getByLabel('明细列名称').last().fill('金额')
+  await page.getByRole('button', { name: '保存草稿' }).click()
+  await expect(page.getByText('流程编号已存在')).toBeVisible()
+  expect(saveFailed).toBeTruthy()
+})
+
+test('keeps the process editor within the mobile viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await setupProcessAppApi(page)
+  await loginAsAdmin(page)
+  await page.goto('/admin/process-apps/new')
+  await page.getByLabel('流程名称').fill('移动端流程')
+  await page.getByLabel('流程编号').fill('mobile-flow')
+  await page.getByRole('button', { name: '下一步' }).click()
+  await expect(page.getByText('申请人信息')).toBeVisible()
+  await page.screenshot({ path: '../artifacts/task-9-editor-mobile.png', fullPage: true })
+  const layout = await page.evaluate(() => ({ viewport: window.innerWidth, scrollWidth: document.documentElement.scrollWidth }))
+  expect(layout.scrollWidth).toBeLessThanOrEqual(layout.viewport)
+})
