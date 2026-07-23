@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import desc, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.approval.database import get_approval_db
@@ -71,6 +72,22 @@ def _publish_validation_error(errors: list) -> HTTPException:
     )
 
 
+def _flush_or_conflict(db: Session, detail: str) -> None:
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=detail) from exc
+
+
+def _commit_or_conflict(db: Session, detail: str) -> None:
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=detail) from exc
+
+
 def _unique_copy_code(db: Session, source_code: str) -> str:
     suffix = "-copy"
     candidate = f"{source_code[: 80 - len(suffix)]}{suffix}"
@@ -121,7 +138,7 @@ def create_process_app(
         status="draft",
     )
     db.add(app)
-    db.flush()
+    _flush_or_conflict(db, "流程编号已存在")
     version = ProcessVersion(
         process_app_id=app.id,
         version_number=1,
@@ -130,9 +147,9 @@ def create_process_app(
         flow_schema=body.flow_schema,
     )
     db.add(version)
-    db.flush()
+    _flush_or_conflict(db, "流程版本冲突，请刷新后重试")
     app.current_version_id = version.id
-    db.commit()
+    _commit_or_conflict(db, "流程编号已存在")
     db.refresh(app)
     db.refresh(version)
     return {"data": serialize_process_app(app, version)}
@@ -164,19 +181,19 @@ def update_process_app(
         app.code = body.code
 
     editable_version = _editable_version(db, app)
-    if app.status == "published" and editable_version.status != "draft":
+    if editable_version.status == "published":
         editable_version = ProcessVersion(
             process_app_id=app.id,
-            version_number=editable_version.version_number + 1,
+            version_number=_versions_for_app(db, app.id)[0].version_number + 1,
             status="draft",
             form_schema=deepcopy(editable_version.form_schema),
             flow_schema=deepcopy(editable_version.flow_schema),
         )
         db.add(editable_version)
-        db.flush()
+        _flush_or_conflict(db, "流程版本冲突，请刷新后重试")
 
     _apply_process_update(app, editable_version, body)
-    db.commit()
+    _commit_or_conflict(db, "流程版本冲突，请刷新后重试")
     db.refresh(app)
     db.refresh(editable_version)
     return {"data": serialize_process_app(app, editable_version)}
@@ -202,7 +219,7 @@ def publish_process_app(
     app.status = "published"
     app.current_version_id = version.id
     app.updated_at = datetime.now(UTC)
-    db.commit()
+    _commit_or_conflict(db, "流程版本冲突，请刷新后重试")
     db.refresh(app)
     db.refresh(version)
     return {"data": serialize_process_app(app, version)}
@@ -224,7 +241,7 @@ def copy_process_app(
         status="draft",
     )
     db.add(app)
-    db.flush()
+    _flush_or_conflict(db, "流程编号已存在")
     version = ProcessVersion(
         process_app_id=app.id,
         version_number=1,
@@ -233,9 +250,9 @@ def copy_process_app(
         flow_schema=deepcopy(source_version.flow_schema),
     )
     db.add(version)
-    db.flush()
+    _flush_or_conflict(db, "流程版本冲突，请刷新后重试")
     app.current_version_id = version.id
-    db.commit()
+    _commit_or_conflict(db, "流程编号已存在")
     db.refresh(app)
     db.refresh(version)
     return {"data": serialize_process_app(app, version)}
@@ -251,7 +268,7 @@ def deactivate_process_app(
     app.status = "inactive"
     app.updated_at = datetime.now(UTC)
     version = _editable_version(db, app)
-    db.commit()
+    _commit_or_conflict(db, "流程版本冲突，请刷新后重试")
     db.refresh(app)
     return {"data": serialize_process_app(app, version)}
 
@@ -275,7 +292,7 @@ def create_user(
         raise HTTPException(status_code=409, detail="邮箱已存在")
     user = ApprovalUser(id=str(uuid4()), **body.model_dump())
     db.add(user)
-    db.commit()
+    _commit_or_conflict(db, "邮箱已存在")
     db.refresh(user)
     return {"data": serialize_approval_user(user)}
 
@@ -298,6 +315,6 @@ def update_user(
             raise HTTPException(status_code=409, detail="邮箱已存在")
     for field, value in updates.items():
         setattr(user, field, value)
-    db.commit()
+    _commit_or_conflict(db, "邮箱已存在")
     db.refresh(user)
     return {"data": serialize_approval_user(user)}

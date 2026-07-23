@@ -197,7 +197,7 @@ def _flow_schema(nodes: list[dict], node_ids: list[str]) -> dict:
         "nodes": flow_nodes,
         "edges": [
             {"source": source, "target": target}
-            for source, target in zip(node_order, node_order[1:])
+            for source, target in zip(node_order, node_order[1:], strict=False)
         ],
     }
 
@@ -253,7 +253,9 @@ def initialize_approval_db() -> None:
             db.flush()
 
             leave_flow = FlowTemplate(
-                name="三级审批（HR终审）", description="部门经理→分管领导→HR", nodes=LEAVE_FLOW_NODES
+                name="三级审批（HR终审）",
+                description="部门经理→分管领导→HR",
+                nodes=LEAVE_FLOW_NODES,
             )
             expense_flow = FlowTemplate(
                 name="三级审批（财务终审）",

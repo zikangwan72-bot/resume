@@ -3,9 +3,11 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import inspect, select
+from sqlalchemy.exc import IntegrityError
 
-from app.approval.database import approval_engine
+from app.approval.database import ApprovalSessionLocal, approval_engine, get_approval_db
 from app.approval.models import ApprovalRequest, ApprovalUser, ProcessApp, ProcessVersion
+from app.main import app
 
 
 @pytest.fixture
@@ -49,8 +51,9 @@ def _create_process_app(client, admin_headers, definition: dict) -> dict:
 
 
 def test_seed_creates_three_published_process_apps(db_session):
-    apps = db_session.scalars(select(ProcessApp).order_by(ProcessApp.code)).all()
-    assert [app.code for app in apps] == ["expense", "leave", "purchase"]
+    apps = db_session.scalars(select(ProcessApp)).all()
+    assert {app.code for app in apps} == {"expense", "leave", "purchase"}
+    assert len(apps) == 3
     assert all(app.status == "published" for app in apps)
     assert all(app.current_version_id for app in apps)
     versions = {version.id: version for version in db_session.scalars(select(ProcessVersion)).all()}
@@ -212,6 +215,178 @@ def test_deactivation_changes_only_the_process_app_status(
     version = db_session.get(ProcessVersion, version_id)
     assert app.current_version_id == version_id
     assert version.status == "published"
+
+
+def test_editing_an_inactive_app_creates_draft_v2_and_preserves_v1_after_republish(
+    client, admin_headers, db_session, valid_definition
+):
+    created = _create_process_app(client, admin_headers, valid_definition)
+    app_id = created["id"]
+    client.post(f"/api/v1/admin/process-apps/{app_id}/publish", headers=admin_headers)
+    published_v1 = db_session.get(ProcessVersion, created["version_id"])
+    v1_form_schema = deepcopy(published_v1.form_schema)
+    v1_flow_schema = deepcopy(published_v1.flow_schema)
+
+    deactivated = client.post(
+        f"/api/v1/admin/process-apps/{app_id}/deactivate", headers=admin_headers
+    )
+    assert deactivated.status_code == 200
+
+    updated = client.put(
+        f"/api/v1/admin/process-apps/{app_id}",
+        headers=admin_headers,
+        json={
+            "form_schema": {
+                "fields": [
+                    *valid_definition["form_schema"]["fields"],
+                    {"id": "destination", "label": "目的地", "type": "text"},
+                ]
+            }
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["data"]["version_number"] == 2
+    assert updated.json()["data"]["version_status"] == "draft"
+
+    republished = client.post(
+        f"/api/v1/admin/process-apps/{app_id}/publish", headers=admin_headers
+    )
+    assert republished.status_code == 200
+    assert republished.json()["data"]["version_number"] == 2
+    assert republished.json()["data"]["status"] == "published"
+
+    db_session.expire_all()
+    versions = db_session.scalars(
+        select(ProcessVersion)
+        .where(ProcessVersion.process_app_id == app_id)
+        .order_by(ProcessVersion.version_number)
+    ).all()
+    assert [(version.version_number, version.status) for version in versions] == [
+        (1, "published"),
+        (2, "published"),
+    ]
+    assert versions[0].form_schema == v1_form_schema
+    assert versions[0].flow_schema == v1_flow_schema
+    assert [field["id"] for field in versions[1].form_schema["fields"]] == [
+        "amount",
+        "reason",
+        "destination",
+    ]
+
+
+def test_process_admin_database_constraints_are_declared():
+    constraints = inspect(approval_engine).get_unique_constraints("approval_users")
+    assert any(constraint["column_names"] == ["email"] for constraint in constraints)
+
+    version_constraints = inspect(approval_engine).get_unique_constraints("process_versions")
+    assert any(
+        constraint["column_names"] == ["process_app_id", "version_number"]
+        for constraint in version_constraints
+    )
+
+
+def test_process_app_create_race_returns_409_and_rolls_back(
+    client, admin_headers, monkeypatch, valid_definition
+):
+    with ApprovalSessionLocal() as db:
+        rollback_called = False
+        original_rollback = db.rollback
+
+        def failing_commit() -> None:
+            raise IntegrityError("INSERT", {}, Exception("unique constraint failed"))
+
+        def recording_rollback() -> None:
+            nonlocal rollback_called
+            rollback_called = True
+            original_rollback()
+
+        monkeypatch.setattr(db, "commit", failing_commit)
+        monkeypatch.setattr(db, "rollback", recording_rollback)
+        app.dependency_overrides[get_approval_db] = lambda: db
+        try:
+            response = client.post(
+                "/api/v1/admin/process-apps", headers=admin_headers, json=valid_definition
+            )
+        finally:
+            app.dependency_overrides.pop(get_approval_db, None)
+
+        assert response.status_code == 409
+        assert rollback_called
+        assert db.scalar(select(ProcessApp.id).limit(1)) is not None
+
+
+def test_process_app_copy_race_returns_409_and_rolls_back(
+    client, admin_headers, monkeypatch, valid_definition
+):
+    created = _create_process_app(client, admin_headers, valid_definition)
+
+    with ApprovalSessionLocal() as db:
+        rollback_called = False
+        original_rollback = db.rollback
+
+        def failing_commit() -> None:
+            raise IntegrityError("INSERT", {}, Exception("unique constraint failed"))
+
+        def recording_rollback() -> None:
+            nonlocal rollback_called
+            rollback_called = True
+            original_rollback()
+
+        monkeypatch.setattr(db, "commit", failing_commit)
+        monkeypatch.setattr(db, "rollback", recording_rollback)
+        app.dependency_overrides[get_approval_db] = lambda: db
+        try:
+            response = client.post(
+                f"/api/v1/admin/process-apps/{created['id']}/copy", headers=admin_headers
+            )
+        finally:
+            app.dependency_overrides.pop(get_approval_db, None)
+
+        assert response.status_code == 409
+        assert rollback_called
+        assert db.scalar(select(ProcessApp.id).limit(1)) is not None
+
+
+def test_next_process_version_conflict_returns_409_and_rolls_back(
+    client, admin_headers, monkeypatch, valid_definition
+):
+    created = _create_process_app(client, admin_headers, valid_definition)
+    app_id = created["id"]
+    client.post(f"/api/v1/admin/process-apps/{app_id}/publish", headers=admin_headers)
+
+    with ApprovalSessionLocal() as db:
+        rollback_called = False
+        original_rollback = db.rollback
+
+        def failing_commit() -> None:
+            raise IntegrityError("INSERT", {}, Exception("unique constraint failed"))
+
+        def recording_rollback() -> None:
+            nonlocal rollback_called
+            rollback_called = True
+            original_rollback()
+
+        monkeypatch.setattr(db, "commit", failing_commit)
+        monkeypatch.setattr(db, "rollback", recording_rollback)
+        app.dependency_overrides[get_approval_db] = lambda: db
+        try:
+            response = client.put(
+                f"/api/v1/admin/process-apps/{app_id}",
+                headers=admin_headers,
+                json={"name": "并发修订"},
+            )
+        finally:
+            app.dependency_overrides.pop(get_approval_db, None)
+
+        assert response.status_code == 409
+        assert rollback_called
+        assert db.scalar(select(ProcessVersion.id).where(ProcessVersion.process_app_id == app_id))
+
+
+def test_each_test_starts_with_only_the_seed_process_apps(db_session):
+    apps = db_session.scalars(select(ProcessApp)).all()
+    assert len(apps) == 3
+    assert {app.code for app in apps} == {"expense", "leave", "purchase"}
 
 
 def test_legacy_admin_routes_are_removed(client, admin_headers):

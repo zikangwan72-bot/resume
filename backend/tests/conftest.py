@@ -18,13 +18,15 @@ from app.db.seed import initialize_database
 from app.main import app
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(autouse=True)
 def database():
+    app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)
     ApprovalBase.metadata.drop_all(bind=approval_engine)
     initialize_database()
     initialize_approval_db()
     yield
+    app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)
     ApprovalBase.metadata.drop_all(bind=approval_engine)
 

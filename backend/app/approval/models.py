@@ -14,7 +14,7 @@ class ApprovalUser(ApprovalBase):
     __tablename__ = "approval_users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     department: Mapped[str] = mapped_column(String(100), nullable=False)
     position: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -73,6 +73,13 @@ class ProcessApp(ApprovalBase):
 
 class ProcessVersion(ApprovalBase):
     __tablename__ = "process_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "process_app_id",
+            "version_number",
+            name="uq_process_versions_app_version_number",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     process_app_id: Mapped[int] = mapped_column(Integer, index=True)
