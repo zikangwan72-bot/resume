@@ -9,6 +9,8 @@ from app.approval.schemas import DefinitionError
 COMPARABLE_FIELD_TYPES = {"number", "money", "text", "textarea", "radio", "select"}
 CONDITION_OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte", "contains", "not_contains"}
 COUNTERSIGN_TYPES = {"counter_sign", "countersign", "counter-sign"}
+NODE_TYPES = {"start", "approval", "countersign", "condition", "end"}
+APPROVAL_NODE_TYPES = {"approval", "countersign"}
 
 
 def compare_value(actual: object, operator: str, expected: object) -> bool:
@@ -33,9 +35,15 @@ def validate_process_definition(
 ) -> list[DefinitionError]:
     errors: list[DefinitionError] = []
     active_users = set(active_user_ids) if isinstance(active_user_ids, Iterable) else set()
-    fields = _items(form_schema, "fields")
-    nodes = _items(flow_schema, "nodes")
-    edges = _items(flow_schema, "edges")
+    fields = _validation_items(
+        form_schema, "fields", "invalid_fields_section", "表单 fields 必须是列表", errors
+    )
+    nodes = _validation_items(
+        flow_schema, "nodes", "invalid_nodes_section", "流程 nodes 必须是列表", errors
+    )
+    edges = _validation_items(
+        flow_schema, "edges", "invalid_edges_section", "流程 edges 必须是列表", errors
+    )
 
     field_types = _validate_fields(fields, errors)
     node_ids, nodes_by_id = _validate_nodes(nodes, active_users, errors)
@@ -51,7 +59,7 @@ def validate_process_definition(
         errors.append(_error("missing_end_node", "流程必须包含一个结束节点"))
     elif len(ends) > 1:
         errors.append(_error("multiple_end_nodes", "流程只能包含一个结束节点"))
-    if not any(node.get("type") == "approval" for node in nodes_by_id.values()):
+    if not any(node.get("type") in APPROVAL_NODE_TYPES for node in nodes_by_id.values()):
         errors.append(_error("missing_approval_node", "流程至少需要一个审批节点"))
 
     outgoing = _adjacency(valid_edges)
@@ -105,7 +113,7 @@ def resolve_execution_path(
             raise ValueError("flow_schema contains a cycle")
         visited.add(current)
         node = nodes_by_id[current]
-        if node.get("type") == "approval":
+        if node.get("type") in APPROVAL_NODE_TYPES:
             path.append(node)
         if node.get("type") == "end":
             return path
@@ -117,8 +125,22 @@ def resolve_execution_path(
 
 
 def _items(schema: dict[str, Any], key: str) -> list[dict[str, Any]]:
-    value = schema.get(key, []) if isinstance(schema, dict) else []
-    return value if isinstance(value, list) else []
+    if not isinstance(schema, dict) or not isinstance(schema.get(key), list):
+        raise ValueError(f"schema section {key!r} must be a list")
+    return schema[key]
+
+
+def _validation_items(
+    schema: object,
+    key: str,
+    code: str,
+    message: str,
+    errors: list[DefinitionError],
+) -> list[Any]:
+    if not isinstance(schema, dict) or not isinstance(schema.get(key), list):
+        errors.append(_error(code, message))
+        return []
+    return schema[key]
 
 
 def _validate_fields(
@@ -157,7 +179,9 @@ def _validate_nodes(
             continue
         node_ids.add(node_id)
         nodes_by_id[node_id] = node
-        if node.get("type") == "approval":
+        if node.get("type") not in NODE_TYPES:
+            errors.append(_error("unknown_node_type", "流程节点类型不受支持", node_id))
+        elif node.get("type") in APPROVAL_NODE_TYPES:
             _validate_approvers(node, active_users, errors)
     return node_ids, nodes_by_id
 
@@ -167,7 +191,7 @@ def _validate_approvers(
 ) -> None:
     node_id = node["id"]
     approval_type = node.get("approval_type", node.get("subtype", node.get("mode", "single")))
-    if approval_type in COUNTERSIGN_TYPES:
+    if node.get("type") == "countersign" or approval_type in COUNTERSIGN_TYPES:
         approver_ids = node.get("approver_ids")
         if not isinstance(approver_ids, list) or not all(
             _valid_id(value) for value in approver_ids
@@ -257,6 +281,8 @@ def _validate_condition_edges(
             if not _valid_id(field_id) or not isinstance(operator, str):
                 errors.append(_error("invalid_condition", "条件分支配置格式无效", node_id))
                 continue
+            if not _has_comparison_value(condition):
+                errors.append(_error("missing_condition_value", "条件分支必须配置比较值", node_id))
             if field_id not in field_types:
                 errors.append(_error("unknown_condition_field", "条件引用的字段不存在", node_id))
             elif field_types[field_id] not in COMPARABLE_FIELD_TYPES:
@@ -295,7 +321,11 @@ def _next_edge(
         if not isinstance(condition, dict):
             raise ValueError("flow_schema contains a malformed condition")
         field_id = condition.get("field_id", condition.get("field"))
-        if not _valid_id(field_id) or not isinstance(condition.get("operator"), str):
+        if (
+            not _valid_id(field_id)
+            or not isinstance(condition.get("operator"), str)
+            or not _has_comparison_value(condition)
+        ):
             raise ValueError("flow_schema contains a malformed condition")
         expected = condition.get("value", condition.get("expected"))
         if compare_value(form_data.get(field_id), condition.get("operator", ""), expected):
@@ -318,7 +348,11 @@ def _runtime_edges(
             if not isinstance(condition, dict):
                 raise ValueError("flow_schema contains a malformed condition")
             field_id = condition.get("field_id", condition.get("field"))
-            if not _valid_id(field_id) or not isinstance(condition.get("operator"), str):
+            if (
+                not _valid_id(field_id)
+                or not isinstance(condition.get("operator"), str)
+                or not _has_comparison_value(condition)
+            ):
                 raise ValueError("flow_schema contains a malformed condition")
         valid_edges.append(edge)
     return valid_edges
@@ -375,6 +409,10 @@ def _has_cycle(node_ids: set[str], outgoing: dict[str, list[dict[str, Any]]]) ->
 
 def _is_default_edge(edge: dict[str, Any]) -> bool:
     return edge.get("default") is True or edge.get("is_default") is True
+
+
+def _has_comparison_value(condition: dict[str, Any]) -> bool:
+    return "value" in condition or "expected" in condition
 
 
 def _valid_id(value: object) -> bool:

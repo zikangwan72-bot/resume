@@ -17,7 +17,7 @@ FieldType = Literal[
     "section",
     "detail_table",
 ]
-NodeType = Literal["start", "end", "approval", "condition"]
+NodeType = Literal["start", "approval", "countersign", "condition", "end"]
 ApprovalType = Literal["single", "counter_sign"]
 ComparisonOperator = Literal["eq", "ne", "gt", "gte", "lt", "lte", "contains", "not_contains"]
 

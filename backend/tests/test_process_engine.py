@@ -476,3 +476,109 @@ def test_validator_returns_structured_errors_for_malformed_members(
 def test_resolver_raises_value_error_for_malformed_cycle_and_dead_end_graphs(flow_schema):
     with pytest.raises(ValueError):
         resolve_execution_path({}, flow_schema)
+
+
+@pytest.mark.parametrize(
+    ("form_schema", "flow_schema", "expected_code"),
+    [
+        ({"fields": {}}, FLOW_WITH_AMOUNT_BRANCH, "invalid_fields_section"),
+        (FORM_SCHEMA, {**FLOW_WITH_AMOUNT_BRANCH, "nodes": {}}, "invalid_nodes_section"),
+        (FORM_SCHEMA, {**FLOW_WITH_AMOUNT_BRANCH, "edges": "not-a-list"}, "invalid_edges_section"),
+    ],
+)
+def test_validator_rejects_non_list_top_level_schema_sections(
+    form_schema, flow_schema, expected_code
+):
+    assert expected_code in _error_codes(form_schema, flow_schema)
+
+
+def test_validator_rejects_unknown_node_type():
+    flow = {
+        **FLOW_WITH_AMOUNT_BRANCH,
+        "nodes": [
+            {**node, "type": "parallel_gateway"} if node["id"] == "manager" else node
+            for node in FLOW_WITH_AMOUNT_BRANCH["nodes"]
+        ],
+    }
+
+    assert "unknown_node_type" in _error_codes(FORM_SCHEMA, flow)
+
+
+def test_validator_supports_countersign_nodes():
+    flow = {
+        "nodes": [
+            {"id": "start", "type": "start"},
+            {"id": "signers", "type": "countersign", "approver_ids": ["u1", "u2"]},
+            {"id": "end", "type": "end"},
+        ],
+        "edges": [
+            {"source": "start", "target": "signers"},
+            {"source": "signers", "target": "end"},
+        ],
+    }
+
+    assert _error_codes(FORM_SCHEMA, flow) == set()
+
+
+def test_resolver_returns_countersign_nodes_as_approval_steps():
+    flow = {
+        "nodes": [
+            {"id": "start", "type": "start"},
+            {"id": "signers", "type": "countersign", "approver_ids": ["u1", "u2"]},
+            {"id": "end", "type": "end"},
+        ],
+        "edges": [
+            {"source": "start", "target": "signers"},
+            {"source": "signers", "target": "end"},
+        ],
+    }
+
+    assert [node["id"] for node in resolve_execution_path({}, flow)] == ["signers"]
+
+
+@pytest.mark.parametrize(
+    ("condition", "expected_code"),
+    [
+        ({"field_id": "", "operator": "eq", "value": 1}, "invalid_condition"),
+        ({"field_id": "amount", "operator": "between", "value": 1}, "invalid_condition_operator"),
+        ({"field_id": "amount", "operator": "eq"}, "missing_condition_value"),
+    ],
+)
+def test_validator_requires_complete_condition_definitions(condition, expected_code):
+    flow = {
+        **FLOW_WITH_AMOUNT_BRANCH,
+        "edges": [
+            {**edge, "condition": condition}
+            if edge["source"] == "amount_gate" and edge.get("condition")
+            else edge
+            for edge in FLOW_WITH_AMOUNT_BRANCH["edges"]
+        ],
+    }
+
+    assert expected_code in _error_codes(FORM_SCHEMA, flow)
+
+
+def test_validator_accepts_compatibility_expected_condition_value():
+    flow = {
+        **FLOW_WITH_AMOUNT_BRANCH,
+        "edges": [
+            {
+                **edge,
+                "condition": {"field_id": "amount", "operator": "gte", "expected": 100000},
+            }
+            if edge["source"] == "amount_gate" and edge.get("condition")
+            else edge
+            for edge in FLOW_WITH_AMOUNT_BRANCH["edges"]
+        ],
+    }
+
+    assert _error_codes(FORM_SCHEMA, flow) == set()
+
+
+def test_validator_rejects_end_node_outgoing_edges():
+    flow = {
+        **FLOW_WITH_AMOUNT_BRANCH,
+        "edges": [*FLOW_WITH_AMOUNT_BRANCH["edges"], {"source": "end", "target": "manager"}],
+    }
+
+    assert "invalid_end_outgoing" in _error_codes(FORM_SCHEMA, flow)
