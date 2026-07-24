@@ -42,3 +42,11 @@ Only Task 10 frontend designer, editor integration, types, focused E2E coverage,
 - Local and backend definition errors are combined by `code`, `target_id`, and `message` before rendering.
 - Matching backend errors retain error severity and the same click-to-focus behavior.
 - PASS: `surfaces publish validation errors on their flow target and publishes a saved draft`.
+
+## Important Findings Fix
+
+- Every condition branch now exposes an accessible `在此分支添加节点` action and renders its serial path to a condition or end node, including deep editable targets.
+- Local validation now reports `flow_cycle` with a focusable target.
+- Legacy `approval + counter_sign` nodes render, edit, validate, and save as canonical countersign nodes.
+- Node cards and branch targets include explicit keyboard/touch edit actions.
+- PASS: `npm.cmd run typecheck` and both isolated `Task10` Playwright scenarios.

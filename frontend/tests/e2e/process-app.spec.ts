@@ -654,3 +654,27 @@ test('reorders and deletes a serial approval node without breaking the saved gra
   expect(payload.flow_schema.nodes.map((node: any) => node.id)).not.toContain('second')
   expect(payload.flow_schema.edges).toEqual(expect.arrayContaining([{ source: 'start', target: 'first' }, { source: 'first', target: 'end' }]))
 })
+
+test('Task10 default branch insertion exposes deep nodes and keyboard edit', async ({ page }) => {
+  const app: any = { ...seededProcessApps[0], id: 150, version_id: 150, current_version_id: 150, status: 'draft', version_status: 'draft', form_schema: { fields: [{ id: 'amount', key: 'amount', type: 'money', label: '金额', required: true }] }, flow_schema: { nodes: [{ id: 'start', type: 'start' }, { id: 'gate', type: 'condition', name: '金额判断' }, { id: 'deep', type: 'approval', name: '默认深层审批', approval_type: 'single', approver_id: 'u-1' }, { id: 'end', type: 'end' }], edges: [{ source: 'start', target: 'gate' }, { source: 'gate', target: 'end', condition: { field_id: 'amount', operator: 'gt', value: 1 } }, { source: 'gate', target: 'deep', default: true }, { source: 'deep', target: 'end' }] } }
+  await setupUserApi(page)
+  await page.route('**/api/v1/admin/process-apps/150', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: app }) }))
+  await loginAsAdmin(page); await page.goto('/admin/process-apps/150/edit'); await page.getByRole('button', { name: '下一步' }).click(); await page.getByRole('button', { name: '下一步' }).click()
+  await expect(page.locator('[data-flow-node-id="deep"]')).toBeVisible()
+  await page.getByLabel('在此分支添加节点 默认分支').click()
+  await expect(page.getByLabel('节点名称')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await page.getByLabel('编辑 默认深层审批').press('Enter')
+  await expect(page.getByLabel('节点名称')).toHaveValue('默认深层审批')
+})
+
+test('Task10 reports a local cycle and canonicalizes legacy countersign editing', async ({ page }) => {
+  const app: any = { ...seededProcessApps[0], id: 151, version_id: 151, current_version_id: 151, status: 'draft', version_status: 'draft', form_schema: { fields: [{ id: 'amount', key: 'amount', type: 'money', label: '金额', required: true }] }, flow_schema: { nodes: [{ id: 'start', type: 'start' }, { id: 'signers', type: 'approval', name: '历史会签', approval_type: 'counter_sign', approver_ids: ['u-1', 'u-2'] }, { id: 'loop', type: 'condition', name: '循环' }, { id: 'end', type: 'end' }], edges: [{ source: 'start', target: 'signers' }, { source: 'signers', target: 'loop' }, { source: 'loop', target: 'loop', condition: { field_id: 'amount', operator: 'gt', value: 1 } }, { source: 'loop', target: 'end', default: true }] } }
+  await setupUserApi(page)
+  await page.route('**/api/v1/admin/process-apps/151', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: app }) }))
+  await loginAsAdmin(page); await page.goto('/admin/process-apps/151/edit'); await page.getByRole('button', { name: '下一步' }).click(); await page.getByRole('button', { name: '下一步' }).click()
+  await expect(page.getByText('流程图不能包含环路')).toBeVisible()
+  await page.getByLabel('编辑 历史会签').click()
+  await expect(page.getByLabel('审批人')).toHaveCount(1)
+  await expect(page.getByLabel('审批人')).toHaveClass(/ant-select-multiple/)
+})

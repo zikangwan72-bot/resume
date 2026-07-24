@@ -60,6 +60,12 @@ function incoming(nodeId: string, value = graph.value) { return value.edges.filt
 function node(nodeId: string, value = graph.value) { return value.nodes.find((item) => item.id === nodeId) }
 function nodeName(nodeId: string) { return node(nodeId)?.name || node(nodeId)?.label || nodeId }
 function isDefault(edge: FlowEdgeSchema) { return edge.default === true }
+function isCountersign(item: FlowNodeSchema | undefined) { return item?.type === 'countersign' || (item?.type === 'approval' && item.approval_type === 'counter_sign') }
+function branchPath(edge: FlowEdgeSchema) {
+  const result: FlowNodeSchema[] = []; const seen = new Set<string>(); let current = node(edge.target)
+  while (current && !seen.has(current.id)) { result.push(current); seen.add(current.id); if (current.type === 'condition' || current.type === 'end') break; current = node(outgoing(current.id)[0]?.target ?? '') }
+  return result
+}
 function conditionLabel(edge: FlowEdgeSchema) {
   if (isDefault(edge)) return '默认分支'
   const condition = edge.condition as Partial<ConditionConfig> | undefined
@@ -73,12 +79,12 @@ function selectNode(id: string) { selectedId.value = id }
 function commitAndSelect(next: FlowSchema, id: string, configure = true) { setGraph(next); selectedId.value = id; if (configure) void openEditor(id) }
 function branchEdgeForAdd(source: string, value: FlowSchema) { return outgoing(source, value).find((edge) => !isDefault(edge)) ?? outgoing(source, value)[0] }
 
-function addNode(kind: 'approval' | 'countersign' | 'condition') {
-  const current = selectedNode()
+function addNode(kind: 'approval' | 'countersign' | 'condition', branch?: FlowEdgeSchema) {
+  const current = branch ? node(branch.source) : selectedNode()
   if (!current || current.type === 'end') return
   if (kind === 'condition' && !eligibleFields.value.length) { message.warning('请先在表单中添加可比较字段'); return }
   const next = copy(graph.value)
-  const parentEdge = current.type === 'condition' ? branchEdgeForAdd(current.id, next) : outgoing(current.id, next)[0]
+  const parentEdge = branch ? next.edges.find((edge) => edge.source === branch.source && edge.target === branch.target && edge.default === branch.default) : current.type === 'condition' ? branchEdgeForAdd(current.id, next) : outgoing(current.id, next)[0]
   if (!parentEdge) { message.warning('当前节点无法安全插入后续节点'); return }
   const target = parentEdge.target
   const id = createId(kind)
@@ -99,7 +105,7 @@ function addNode(kind: 'approval' | 'countersign' | 'condition') {
 
 function startEditorValue(item: FlowNodeSchema): EditableNode {
   return {
-    ...copy(item), name: String(item.name ?? item.label ?? ''), approval_type: item.approval_type ?? (item.type === 'countersign' ? 'counter_sign' : 'single'),
+    ...copy(item), type: isCountersign(item) ? 'countersign' : item.type, name: String(item.name ?? item.label ?? ''), approval_type: isCountersign(item) ? 'counter_sign' : 'single',
     approver_id: String(item.approver_id ?? ''), approver_ids: Array.isArray(item.approver_ids) ? [...item.approver_ids] : [],
     allow_transfer: item.allow_transfer === true, timeout_hours: Number(item.timeout_hours ?? 0),
   }
@@ -129,12 +135,12 @@ function applyEditor() {
   if (index < 0) return
   const current = editing.value
   if (!current.name.trim()) { message.error('节点名称不能为空'); return }
-  if (current.type === 'approval' && !current.approver_id) { message.error('请选择审批人'); return }
-  if (current.type === 'countersign' && (current.approver_ids.length < 2 || new Set(current.approver_ids).size !== current.approver_ids.length)) { message.error('会签至少需要两名不同审批人'); return }
+  if (!isCountersign(current) && current.type === 'approval' && !current.approver_id) { message.error('请选择审批人'); return }
+  if (isCountersign(current) && (current.approver_ids.length < 2 || new Set(current.approver_ids).size !== current.approver_ids.length)) { message.error('会签至少需要两名不同审批人'); return }
   if (current.type === 'condition' && (!currentConditionValid())) { message.error('请完成条件字段、比较方式和比较值'); return }
   const saved: FlowNodeSchema = { ...current, name: current.name.trim(), timeout_hours: Math.max(0, Number(current.timeout_hours) || 0) }
-  if (saved.type === 'approval') { saved.approval_type = 'single'; saved.approver_ids = undefined; saved.allow_transfer = current.allow_transfer; saved.approver_id = current.approver_id }
-  if (saved.type === 'countersign') { saved.approval_type = 'counter_sign'; saved.approver_id = undefined; saved.approver_ids = [...current.approver_ids]; saved.allow_transfer = current.allow_transfer }
+  if (isCountersign(saved)) { saved.type = 'countersign'; saved.approval_type = 'counter_sign'; saved.approver_id = undefined; saved.approver_ids = [...current.approver_ids]; saved.allow_transfer = current.allow_transfer }
+  else if (saved.type === 'approval') { saved.approval_type = 'single'; saved.approver_ids = undefined; saved.allow_transfer = current.allow_transfer; saved.approver_id = current.approver_id }
   next.nodes[index] = saved
   if (saved.type === 'condition') {
     const edge = outgoing(saved.id, next).find((candidate) => !isDefault(candidate))
@@ -160,17 +166,17 @@ function deleteSelected() {
 }
 function canMove(direction: 'up' | 'down') {
   const current = selectedNode()
-  if (!current || !['approval', 'countersign'].includes(current.type)) return false
-  if (direction === 'up') return Boolean(incoming(current.id).find((edge) => ['approval', 'countersign'].includes(node(edge.source)?.type ?? '')))
+  if (!current || !['approval', 'countersign'].includes(current.type) && !isCountersign(current)) return false
+  if (direction === 'up') return Boolean(incoming(current.id).find((edge) => { const item = node(edge.source); return item?.type === 'approval' || isCountersign(item) }))
   const nextId = outgoing(current.id)[0]?.target
-  return Boolean(nextId && ['approval', 'countersign'].includes(node(nextId)?.type ?? ''))
+  return Boolean(nextId && (node(nextId)?.type === 'approval' || isCountersign(node(nextId))))
 }
 function moveSelected(direction: 'up' | 'down') {
   if (!canMove(direction)) return
   const current = selectedNode()!
   const next = copy(graph.value)
   if (direction === 'up') {
-    const before = incoming(current.id, next).find((edge) => ['approval', 'countersign'].includes(node(edge.source, next)?.type ?? ''))!
+    const before = incoming(current.id, next).find((edge) => { const item = node(edge.source, next); return item?.type === 'approval' || isCountersign(item) })!
     const previous = before.source
     const parentEdges = incoming(previous, next)
     const currentOut = outgoing(current.id, next)[0]
@@ -208,12 +214,15 @@ function validate(value: FlowSchema): FlowValidationIssue[] {
     if (!ids.has(edge.source) || !ids.has(edge.target)) errors.push({ code: 'unknown_edge_node', message: '连线引用了不存在的节点' })
     else outgoingMap.set(edge.source, [...(outgoingMap.get(edge.source) ?? []), edge])
   }
+  const visiting = new Set<string>(); const visited = new Set<string>(); let cycleTarget: string | undefined
+  const visit = (id: string): boolean => { if (visiting.has(id)) { cycleTarget = id; return true }; if (visited.has(id)) return false; visiting.add(id); const found = (outgoingMap.get(id) ?? []).some((edge) => visit(edge.target)); visiting.delete(id); visited.add(id); return found }
+  if (nodes.some((item) => visit(item.id))) errors.push({ code: 'flow_cycle', message: '流程图不能包含环路', target_id: cycleTarget })
   for (const item of nodes) {
     const out = outgoingMap.get(item.id) ?? []
     if (item.type === 'end' && out.length) errors.push({ code: 'invalid_end_outgoing', message: '结束节点不能有出边', target_id: item.id })
     if (item.type !== 'end' && item.type !== 'condition' && out.length !== 1) errors.push({ code: 'invalid_non_condition_branch', message: '非条件节点必须有且仅有一条出边', target_id: item.id })
-    if (item.type === 'approval' && (!item.approver_id || !active.has(item.approver_id))) errors.push({ code: 'inactive_approver', message: '审批人必须是启用员工', target_id: item.id })
-    if (item.type === 'countersign') {
+    if (!isCountersign(item) && item.type === 'approval' && (!item.approver_id || !active.has(item.approver_id))) errors.push({ code: 'inactive_approver', message: '审批人必须是启用员工', target_id: item.id })
+    if (isCountersign(item)) {
       const approvers = item.approver_ids ?? []
       if (approvers.length < 2 || new Set(approvers).size !== approvers.length || approvers.some((id) => !active.has(id))) errors.push({ code: 'invalid_countersign_approvers', message: '会签节点至少需要两名不同的启用员工', target_id: item.id })
     }
@@ -273,23 +282,24 @@ onMounted(() => { const normalized = fixedGraph(props.modelValue); if (JSON.stri
     <div class="flow-canvas" aria-label="审批流程图">
       <div class="primary-lane">
         <template v-for="item in primaryNodes" :key="item.id">
-          <button class="flow-node" :class="[{ selected: selectedId === item.id }, item.type]" :data-flow-node-id="item.id" type="button" @click="selectNode(item.id)" @dblclick="openEditor(item.id)">
-            <span class="node-kicker">{{ item.type === 'start' ? '起点' : item.type === 'end' ? '终点' : item.type === 'countersign' ? '会签' : '审批' }}</span>
+          <div class="node-wrap"><button class="flow-node" :class="[{ selected: selectedId === item.id }, item.type]" :data-flow-node-id="item.id" type="button" @click="selectNode(item.id)" @dblclick="openEditor(item.id)">
+            <span class="node-kicker">{{ item.type === 'start' ? '起点' : item.type === 'end' ? '终点' : isCountersign(item) ? '会签' : '审批' }}</span>
             <strong>{{ item.name || item.label || (item.type === 'start' ? '开始' : '结束') }}</strong>
-            <small v-if="item.type === 'approval'">{{ userOptions.find((user) => user.value === item.approver_id)?.label || '待选择审批人' }}</small>
-            <small v-if="item.type === 'countersign'">{{ item.approver_ids?.length ? `${item.approver_ids.length} 名审批人` : '待选择审批人' }}</small>
-          </button>
+            <small v-if="item.type === 'approval' && !isCountersign(item)">{{ userOptions.find((user) => user.value === item.approver_id)?.label || '待选择审批人' }}</small>
+            <small v-if="isCountersign(item)">{{ item.approver_ids?.length ? `${item.approver_ids.length} 名审批人` : '待选择审批人' }}</small>
+          </button><a-button v-if="item.type !== 'start' && item.type !== 'end'" size="small" :aria-label="`编辑 ${nodeName(item.id)}`" @click="openEditor(item.id)"><EditOutlined />编辑</a-button></div>
           <span v-if="item.type !== 'end'" class="connector" aria-hidden="true">↓</span>
         </template>
       </div>
       <div v-if="graph.nodes.some((item) => item.type === 'condition')" class="condition-area">
         <article v-for="conditionNode in graph.nodes.filter((item) => item.type === 'condition')" :key="conditionNode.id" class="condition-block">
-          <button class="flow-node condition" :class="{ selected: selectedId === conditionNode.id }" :data-flow-node-id="conditionNode.id" type="button" @click="selectNode(conditionNode.id)" @dblclick="openEditor(conditionNode.id)"><span class="node-kicker">条件</span><strong>{{ conditionNode.name || '条件分支' }}</strong><small>按顺序匹配，未命中进入默认分支</small></button>
+          <div class="node-wrap"><button class="flow-node condition" :class="{ selected: selectedId === conditionNode.id }" :data-flow-node-id="conditionNode.id" type="button" @click="selectNode(conditionNode.id)" @dblclick="openEditor(conditionNode.id)"><span class="node-kicker">条件</span><strong>{{ conditionNode.name || '条件分支' }}</strong><small>按顺序匹配，未命中进入默认分支</small></button><a-button size="small" :aria-label="`编辑 ${nodeName(conditionNode.id)}`" @click="openEditor(conditionNode.id)"><EditOutlined />编辑</a-button></div>
           <div class="branch-lanes">
             <div v-for="edge in outgoing(conditionNode.id)" :key="`${edge.source}-${edge.target}-${edge.default ? 'default' : JSON.stringify(edge.condition)}`" class="branch-lane" :class="{ default: isDefault(edge) }">
               <span class="branch-label">{{ isDefault(edge) ? '默认分支' : '条件分支' }}</span>
               <span v-if="!isDefault(edge)" class="branch-rule">{{ conditionLabel(edge) }}</span>
-              <button class="branch-target" :data-flow-node-id="edge.target" type="button" @click="selectNode(edge.target)"><strong>{{ nodeName(edge.target) }}</strong><small>{{ node(edge.target)?.type === 'end' ? '汇入结束节点' : '继续审批' }}</small></button>
+              <template v-for="branchNode in branchPath(edge)" :key="branchNode.id"><div class="node-wrap"><button class="branch-target" :data-flow-node-id="branchNode.id" type="button" @click="selectNode(branchNode.id)" @dblclick="openEditor(branchNode.id)"><strong>{{ nodeName(branchNode.id) }}</strong><small>{{ branchNode.type === 'end' ? '汇入结束节点' : isCountersign(branchNode) ? '会签节点' : '继续审批' }}</small></button><a-button v-if="branchNode.type !== 'end'" size="small" :aria-label="`编辑 ${nodeName(branchNode.id)}`" @click="openEditor(branchNode.id)"><EditOutlined />编辑</a-button></div></template>
+              <a-button size="small" :aria-label="`在此分支添加节点 ${isDefault(edge) ? '默认分支' : '条件分支'}`" @click="addNode('approval', edge)"><PlusOutlined />在此分支添加节点</a-button>
             </div>
           </div>
         </article>
@@ -301,7 +311,7 @@ onMounted(() => { const normalized = fixedGraph(props.modelValue); if (JSON.stri
       <a-form v-if="editing" layout="vertical">
         <a-form-item label="节点名称"><a-input v-model:value="editing.name" aria-label="节点名称" maxlength="80" /></a-form-item>
         <template v-if="editing.type === 'approval' || editing.type === 'countersign'">
-          <a-form-item label="审批人"><a-select v-if="editing.type === 'countersign'" v-model:value="editing.approver_ids" aria-label="审批人" mode="multiple" :options="userOptions" :max-tag-count="2" /><a-select v-else v-model:value="editing.approver_id" aria-label="审批人" :options="userOptions" /></a-form-item>
+          <a-form-item label="审批人"><a-select v-if="isCountersign(editing)" v-model:value="editing.approver_ids" aria-label="审批人" mode="multiple" :options="userOptions" :max-tag-count="2" /><a-select v-else v-model:value="editing.approver_id" aria-label="审批人" :options="userOptions" /></a-form-item>
           <a-form-item label="允许转审"><a-switch v-model:checked="editing.allow_transfer" /></a-form-item>
           <a-form-item label="超时时间（小时）"><a-input-number v-model:value="editing.timeout_hours" aria-label="超时时间（小时）" :min="0" :precision="0" style="width:100%" /></a-form-item>
         </template>
@@ -319,6 +329,6 @@ onMounted(() => { const normalized = fixedGraph(props.modelValue); if (JSON.stri
 
 <style scoped>
 .flow-designer { display: grid; gap: 16px; min-width: 0; color: #172033; } .designer-header, .designer-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; } .designer-header h2 { margin: 0; font-size: 18px; font-weight: 700; } .designer-header p, .canvas-hint { margin: 4px 0 0; color: #687386; font-size: 13px; } .designer-tools { justify-content: flex-start; flex-wrap: wrap; padding: 12px 0; border-block: 1px solid #e7ebf1; } .tool-separator { height: 26px; border-left: 1px solid #dce2ea; }
-.flow-canvas { overflow: auto; padding: 20px 12px 12px; background: repeating-linear-gradient(0deg, #fff, #fff 27px, #f7f9fb 28px), repeating-linear-gradient(90deg, transparent, transparent 27px, #f7f9fb 28px); border: 1px solid #e5eaf0; min-height: 390px; } .primary-lane { display: flex; align-items: center; justify-content: center; gap: 10px; min-width: 680px; } .connector { color: #6c7b92; font-size: 20px; line-height: 1; } .flow-node, .branch-target { display: grid; gap: 5px; width: 168px; min-height: 100px; padding: 12px; text-align: left; border: 1px solid #cfd8e4; border-radius: 6px; background: #fff; cursor: pointer; box-shadow: 0 1px 2px rgb(22 32 51 / 6%); } .flow-node:hover, .branch-target:hover { border-color: #356ad2; } .flow-node:focus-visible, .branch-target:focus-visible { outline: 3px solid #9ebcf7; outline-offset: 2px; } .flow-node.selected { border-color: #245bbf; box-shadow: 0 0 0 2px rgb(36 91 191 / 16%); } .flow-node.start, .flow-node.end { width: 108px; min-height: 72px; place-items: center; text-align: center; } .flow-node.condition { width: 224px; border-color: #d8a72a; background: #fffdf5; } .node-kicker, .branch-label { color: #67758b; font-size: 12px; } .flow-node strong, .branch-target strong { font-size: 14px; } .flow-node small, .branch-target small, .branch-rule { color: #6d7889; font-size: 12px; line-height: 1.45; } .condition-area { display: grid; gap: 20px; margin-top: 26px; min-width: 680px; } .condition-block { display: grid; justify-items: center; gap: 14px; } .branch-lanes { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); width: min(760px, 100%); gap: 14px; } .branch-lane { display: grid; justify-items: center; gap: 7px; padding: 12px; border-top: 2px solid #4f83dc; background: rgb(79 131 220 / 4%); } .branch-lane.default { border-top-color: #8290a4; background: rgb(130 144 164 / 5%); } .branch-rule { min-height: 34px; text-align: center; } .canvas-hint { margin: 0; } .native-select { width: 100%; height: 32px; padding: 4px 10px; color: #172033; border: 1px solid #d9d9d9; border-radius: 6px; background: #fff; }
+.flow-canvas { overflow: auto; padding: 20px 12px 12px; background: repeating-linear-gradient(0deg, #fff, #fff 27px, #f7f9fb 28px), repeating-linear-gradient(90deg, transparent, transparent 27px, #f7f9fb 28px); border: 1px solid #e5eaf0; min-height: 390px; } .primary-lane { display: flex; align-items: center; justify-content: center; gap: 10px; min-width: 680px; } .node-wrap { display: grid; justify-items: center; gap: 6px; } .connector { color: #6c7b92; font-size: 20px; line-height: 1; } .flow-node, .branch-target { display: grid; gap: 5px; width: 168px; min-height: 100px; padding: 12px; text-align: left; border: 1px solid #cfd8e4; border-radius: 6px; background: #fff; cursor: pointer; box-shadow: 0 1px 2px rgb(22 32 51 / 6%); } .flow-node:hover, .branch-target:hover { border-color: #356ad2; } .flow-node:focus-visible, .branch-target:focus-visible { outline: 3px solid #9ebcf7; outline-offset: 2px; } .flow-node.selected { border-color: #245bbf; box-shadow: 0 0 0 2px rgb(36 91 191 / 16%); } .flow-node.start, .flow-node.end { width: 108px; min-height: 72px; place-items: center; text-align: center; } .flow-node.condition { width: 224px; border-color: #d8a72a; background: #fffdf5; } .node-kicker, .branch-label { color: #67758b; font-size: 12px; } .flow-node strong, .branch-target strong { font-size: 14px; } .flow-node small, .branch-target small, .branch-rule { color: #6d7889; font-size: 12px; line-height: 1.45; } .condition-area { display: grid; gap: 20px; margin-top: 26px; min-width: 680px; } .condition-block { display: grid; justify-items: center; gap: 14px; } .branch-lanes { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); width: min(760px, 100%); gap: 14px; } .branch-lane { display: grid; justify-items: center; gap: 7px; padding: 12px; border-top: 2px solid #4f83dc; background: rgb(79 131 220 / 4%); } .branch-lane.default { border-top-color: #8290a4; background: rgb(130 144 164 / 5%); } .branch-rule { min-height: 34px; text-align: center; } .canvas-hint { margin: 0; } .native-select { width: 100%; height: 32px; padding: 4px 10px; color: #172033; border: 1px solid #d9d9d9; border-radius: 6px; background: #fff; }
 @media (max-width: 760px) { .designer-header { align-items: flex-start; } .designer-header .ant-tag { display: none; } .designer-tools { align-items: stretch; } .designer-tools :deep(.ant-btn) { flex: 1 1 108px; } .tool-separator { display: none; } .flow-canvas { padding: 14px 8px; min-height: 330px; } .primary-lane { justify-content: flex-start; } .branch-lanes { grid-template-columns: 1fr 1fr; min-width: 520px; } }
 </style>

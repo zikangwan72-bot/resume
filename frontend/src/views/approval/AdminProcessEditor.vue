@@ -15,7 +15,7 @@ const draft = reactive<ProcessAppDraft>({ code: '', name: '', category: '通用�
 const isEdit = computed(() => typeof route.params.id === 'string')
 const visibleFlowIssues = computed(() => {
   const errors = new Map<string, { issue: FlowValidationIssue; type: 'warning' | 'error' }>()
-  const keyFor = (issue: FlowValidationIssue) => `${issue.code}\u0000${issue.target_id ?? ''}\u0000${issue.message}`
+  const keyFor = (issue: FlowValidationIssue) => `${issue.code}\u0000${issue.target_id ?? ''}`
   flowIssues.value.forEach((issue) => errors.set(keyFor(issue), { issue, type: 'warning' }))
   publishIssues.value.forEach((issue) => errors.set(keyFor(issue), { issue, type: 'error' }))
   return [...errors.values()]
@@ -160,7 +160,7 @@ watch(() => route.params.id, () => { void load() })
         </div>
         <div v-show="step === 1" class="stage"><FormSchemaDesigner v-model="draft.form_schema" /></div>
         <div v-show="step === 2" class="stage flow-stage">
-          <a-alert v-for="entry in visibleFlowIssues" :key="`${entry.issue.code}-${entry.issue.target_id}-${entry.issue.message}`" class="definition-alert" :type="entry.type" show-icon :message="entry.issue.message" @click="focusDefinitionIssue(entry.issue)" />
+          <a-alert v-for="entry in visibleFlowIssues" :key="`${entry.issue.code}-${entry.issue.target_id}`" class="definition-alert" :type="entry.type" show-icon :message="entry.issue.message" @click="focusDefinitionIssue(entry.issue)" />
           <FlowSchemaDesigner ref="flowDesigner" v-model="draft.flow_schema" :users="users" :fields="draft.form_schema.fields" @validationChange="flowIssues = $event" />
         </div>
         <div v-show="step === 3" class="stage preview-stage">
