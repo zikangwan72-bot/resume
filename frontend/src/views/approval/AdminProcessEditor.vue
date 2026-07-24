@@ -102,8 +102,8 @@ async function loadUsers() {
 async function next() { if (step.value === 0) { await formRef.value?.validate(); } if (step.value < 3) step.value += 1 }
 function previous() { if (step.value > 0) step.value -= 1 }
 async function save(): Promise<ProcessApp | null> {
-  try { await formRef.value?.validate() } catch { step.value = 0; return }
-  if (!validateSchema()) return
+  try { await formRef.value?.validate() } catch { step.value = 0; return null }
+  if (!validateSchema()) return null
   saving.value = true
   const payload = { code: draft.code.trim(), name: draft.name.trim(), category: draft.category, description: draft.description || null, form_schema: draft.form_schema, flow_schema: draft.flow_schema }
   try {

@@ -17,3 +17,9 @@
 ## Scope
 
 Only Task 11 dynamic-form, request submission/detail, focused E2E coverage, and this report were changed. No monitor, migration, or legacy cleanup work was included.
+
+## Final Bounded Fixes
+
+- `AdminProcessEditor.save()` now returns `null` for client validation exits, matching its declared `Promise<ProcessApp | null>` contract.
+- PASS: `npm.cmd run build`.
+- BLOCKED: the isolated high-value purchase Playwright scenario still fails at the date field. Ant Design Vue renders the picker input with `readonly` despite `input-read-only="false"`, so the current test's `locator.fill()` cannot interact with it. The test needs to select `2026-08-01` from the picker popup rather than typing into its input; no additional test iteration was performed under the bounded request.
