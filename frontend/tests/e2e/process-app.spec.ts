@@ -691,6 +691,7 @@ test('Task11 submits a high-value purchase with a stable idempotency key', async
   const payloads: any[] = []
   await page.route('**/api/v1/approvals/apps', async route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [app] }) }))
   await page.route('**/api/v1/approvals/requests', async route => {
+    if (route.request().method() !== 'POST') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
     payloads.push(route.request().postDataJSON())
     if (payloads.length === 1) return route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ detail: { message: '采购金额不能小于最小值', field_id: 'amount' } }) })
     return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { id: 99 } }) })
@@ -700,12 +701,13 @@ test('Task11 submits a high-value purchase with a stable idempotency key', async
   await page.getByText('采购申请', { exact: true }).click()
   await expect(page.getByText('申请人信息')).toBeVisible()
   await page.getByLabel('采购金额').fill('120000')
-  await page.locator('.ant-picker input').fill('2026-08-01')
+  await page.locator('.ant-picker').click()
+  await page.locator('td[title="2026-08-01"] .ant-picker-cell-inner').click()
   await page.getByRole('button', { name: '添加明细行' }).click()
   await page.getByLabel('采购明细 第1行 物品').fill('服务器')
   await page.getByLabel('采购明细 第1行 数量').fill('2')
   await page.getByRole('button', { name: '提交申请' }).click()
-  await expect(page.getByText('采购金额不能小于最小值')).toBeVisible()
+  await expect(page.locator('.ant-form-item-explain-error').filter({ hasText: '采购金额不能小于最小值' })).toBeVisible()
   await page.getByRole('button', { name: '提交申请' }).click()
   await expect(page).toHaveURL(/approval-center\/requests/)
   expect(payloads).toHaveLength(2)
