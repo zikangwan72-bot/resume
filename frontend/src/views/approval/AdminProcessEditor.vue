@@ -155,7 +155,7 @@ watch(() => route.params.id, () => { void load() })
         <div v-show="step === 2" class="stage flow-stage">
           <a-alert v-for="issue in flowIssues" :key="`local-${issue.code}-${issue.target_id}`" class="definition-alert" type="warning" show-icon :message="issue.message" @click="focusDefinitionIssue(issue)" />
           <a-alert v-for="issue in publishIssues" :key="`${issue.code}-${issue.target_id}`" class="definition-alert" type="error" show-icon :message="issue.message" @click="focusDefinitionIssue(issue)" />
-          <FlowSchemaDesigner ref="flowDesigner" v-model="draft.flow_schema" :users="users" :fields="draft.form_schema.fields" @validation-change="flowIssues = $event" />
+          <FlowSchemaDesigner ref="flowDesigner" v-model="draft.flow_schema" :users="users" :fields="draft.form_schema.fields" @validationChange="flowIssues = $event" />
         </div>
         <div v-show="step === 3" class="stage preview-stage">
           <div class="preview-heading"><div><h2>预览发布</h2><p>确认应用元信息、表单字段与审批流后发布新版本。</p></div><a-tag :color="flowIssues.length ? 'warning' : 'success'">{{ flowIssues.length ? `${flowIssues.length} 项流程校验提示` : '流程校验通过' }}</a-tag></div>

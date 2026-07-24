@@ -30,3 +30,9 @@ Result:
 ## Scope
 
 Only Task 10 frontend designer, editor integration, types, focused E2E coverage, and this report were changed. No Task 11 submission work was added.
+
+## Follow-up Fix
+
+- Hydration validation now watches model, users, and fields together after the parent flushes state.
+- The editor listener now matches the emitted `validationChange` event exactly.
+- The isolated missing-approver Playwright test passed. The subsequent full focused-spec run was interrupted before a result was available.

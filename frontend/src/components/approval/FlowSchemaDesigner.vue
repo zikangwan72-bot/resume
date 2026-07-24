@@ -36,7 +36,6 @@ const selectedId = ref('start')
 const editorOpen = ref(false)
 const editing = ref<EditableNode | null>(null)
 const editingCondition = ref<ConditionConfig>({ field_id: '', operator: 'eq', value: '' })
-let applying = false
 
 function copy<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T }
 function createId(prefix: string) { return `${prefix}-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}` }
@@ -53,10 +52,8 @@ function fixedGraph(value: FlowSchema | undefined): FlowSchema {
 }
 function setGraph(value: FlowSchema) {
   graph.value = copy(value)
-  applying = true
   emit('update:modelValue', copy(value))
   emit('validationChange', validate(value))
-  queueMicrotask(() => { applying = false })
 }
 function outgoing(nodeId: string, value = graph.value) { return value.edges.filter((edge) => edge.source === nodeId) }
 function incoming(nodeId: string, value = graph.value) { return value.edges.filter((edge) => edge.target === nodeId) }
@@ -252,9 +249,12 @@ function focusTarget(id?: string) {
 }
 defineExpose({ focusTarget })
 
-watch(() => props.modelValue, (value) => { if (!applying) { graph.value = fixedGraph(value); emit('validationChange', validate(graph.value)) } }, { deep: true, immediate: true })
-watch(() => props.users, () => emit('validationChange', validate(graph.value)), { deep: true })
-onMounted(() => { const normalized = fixedGraph(props.modelValue); graph.value = normalized; if (JSON.stringify(normalized) !== JSON.stringify(props.modelValue)) setGraph(normalized); else emit('validationChange', validate(normalized)) })
+function hydrateAndValidate(value: FlowSchema) {
+  graph.value = fixedGraph(value)
+  emit('validationChange', validate(graph.value))
+}
+watch([() => props.modelValue, () => props.users, () => props.fields], ([value]) => hydrateAndValidate(value), { deep: true, immediate: true, flush: 'post' })
+onMounted(() => { const normalized = fixedGraph(props.modelValue); if (JSON.stringify(normalized) !== JSON.stringify(props.modelValue)) setGraph(normalized); hydrateAndValidate(props.modelValue) })
 </script>
 
 <template>
