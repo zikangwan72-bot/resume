@@ -678,3 +678,54 @@ test('Task10 reports a local cycle and canonicalizes legacy countersign editing'
   await expect(page.getByLabel('审批人')).toHaveCount(1)
   await expect(page.getByLabel('审批人')).toHaveClass(/ant-select-multiple/)
 })
+
+test('Task11 submits a high-value purchase with a stable idempotency key', async ({ page }) => {
+  const app: any = {
+    ...seededProcessApps[2],
+    form_schema: { fields: [
+      { id: 'amount', key: 'amount', label: '采购金额', type: 'money', required: true, min: 1, precision: 2 },
+      { id: 'need_by', key: 'need_by', label: '期望日期', type: 'date', required: true },
+      { id: 'items', key: 'items', label: '采购明细', type: 'detail_table', required: true, columns: [{ id: 'name', key: 'name', label: '物品', type: 'text', required: true }, { id: 'qty', key: 'qty', label: '数量', type: 'number', required: true, min: 1 }] },
+    ] },
+  }
+  const payloads: any[] = []
+  await page.route('**/api/v1/approvals/apps', async route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [app] }) }))
+  await page.route('**/api/v1/approvals/requests', async route => {
+    payloads.push(route.request().postDataJSON())
+    if (payloads.length === 1) return route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ detail: { message: '采购金额不能小于最小值', field_id: 'amount' } }) })
+    return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { id: 99 } }) })
+  })
+  await loginAsAdmin(page)
+  await page.goto('/modules/approval-center/new')
+  await page.getByText('采购申请', { exact: true }).click()
+  await expect(page.getByText('申请人信息')).toBeVisible()
+  await page.getByLabel('采购金额').fill('120000')
+  await page.locator('.ant-picker input').fill('2026-08-01')
+  await page.getByRole('button', { name: '添加明细行' }).click()
+  await page.getByLabel('采购明细 第1行 物品').fill('服务器')
+  await page.getByLabel('采购明细 第1行 数量').fill('2')
+  await page.getByRole('button', { name: '提交申请' }).click()
+  await expect(page.getByText('采购金额不能小于最小值')).toBeVisible()
+  await page.getByRole('button', { name: '提交申请' }).click()
+  await expect(page).toHaveURL(/approval-center\/requests/)
+  expect(payloads).toHaveLength(2)
+  expect(payloads[0]).toMatchObject({ process_app_id: 3, title: expect.any(String), form_data: { amount: 120000, need_by: '2026-08-01', items: [{ name: '服务器', qty: 2 }] } })
+  expect(payloads[0].idempotency_key).toBe(payloads[1].idempotency_key)
+})
+
+test('Task11 renders request snapshots and surfaces action errors on mobile', async ({ page }) => {
+  const detail: any = {
+    id: 88, process_app_id: 3, process_version_id: 13, applicant_id: '11111111-1111-1111-1111-111111111111', applicant_name: '张三', applicant_snapshot: { display_name: '张三', email: 'zhangsan@example.com', department: '产品研发部', position: '产品经理' }, title: '采购申请 - 高价值', form_data: { amount: 120000, choice: '紧急' }, form_schema_snapshot: { fields: [{ id: 'amount', label: '采购金额', type: 'money', required: true }, { id: 'choice', label: '紧急程度', type: 'select', required: true, options: ['紧急'] }] }, status: 'pending', current_node_index: 1, flow_snapshot: [{ id: 'start', index: 0, type: 'start', name: '开始' }, { id: 'gate', index: 1, type: 'condition', name: '金额判断' }, { id: 'sign', index: 2, type: 'countersign', name: '会签' }], nodes: [{ id: 1, node_index: 2, node_key: 'sign', timeout_hours: 24, approver_id: '11111111-1111-1111-1111-111111111111', approver_name: '平台管理员', status: 'pending', comment: null, acted_at: null }, { id: 2, node_index: 2, node_key: 'sign', timeout_hours: 24, approver_id: 'u-2', approver_name: '李四', status: 'pending', comment: null, acted_at: null }], actions: [{ id: 1, node_id: 1, actor_id: 'u-1', actor_name: '张三', action: 'urge', comment: '提醒处理', created_at: '2026-07-24T10:00:00Z' }], created_at: '2026-07-24T09:00:00Z', updated_at: '2026-07-24T09:00:00Z', submitted_at: '2026-07-24T09:00:00Z', completed_at: null,
+  }
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.route('**/api/v1/approvals/requests/88', async route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: detail }) }))
+  await page.route('**/api/v1/approvals/users', async route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: seededUsers }) }))
+  await page.route('**/api/v1/approvals/nodes/1/approve', async route => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: '审批失败' }) }))
+  await loginAsAdmin(page)
+  await page.goto('/modules/approval-center/88')
+  await expect(page.getByText('流程版本')).toBeVisible()
+  await expect(page.getByText('产品研发部')).toBeVisible()
+  await expect(page.getByText('李四')).toBeVisible()
+  await page.getByRole('button', { name: '同意' }).click()
+  await expect(page.getByText('审批失败')).toBeVisible()
+})
