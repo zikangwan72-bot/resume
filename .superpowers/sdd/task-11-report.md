@@ -23,3 +23,10 @@ Only Task 11 dynamic-form, request submission/detail, focused E2E coverage, and 
 - `AdminProcessEditor.save()` now returns `null` for client validation exits, matching its declared `Promise<ProcessApp | null>` contract.
 - PASS: `npm.cmd run build`.
 - PASS: the isolated high-value purchase Playwright scenario now selects deterministic `2026-08-01` through the Ant DatePicker popup. It verifies the exact payload, server 422 field error, retry with the same idempotency key, and navigation to requests.
+
+## Task 11 Blocker Fixes
+
+- New process-app submissions snapshot the applicant email. Detail retains `-` as the safe fallback for legacy snapshots without an email.
+- Urge is shown only to the pending applicant and uses `PUT /requests/{id}/urge`; approvers who are not the applicant do not see the action.
+- The UI now labels the snapshot view `已选择审批路径`. It displays approval/countersign nodes only and computes the active step from the actual pending node key, with a legacy node-index fallback. It does not claim a full condition-node trace.
+- PASS: focused backend snapshot test and Ruff, frontend typecheck, and targeted detail/urge E2E tests.

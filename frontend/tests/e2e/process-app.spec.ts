@@ -731,3 +731,19 @@ test('Task11 renders request snapshots and surfaces action errors on mobile', as
   await page.getByRole('button', { name: '同意' }).click()
   await expect(page.getByText('审批失败')).toBeVisible()
 })
+
+test('Task11 shows PUT urge only to the pending applicant', async ({ page }) => {
+  const detail: any = { id: 89, applicant_id: '11111111-1111-1111-1111-111111111111', applicant_name: '平台管理员', applicant_snapshot: { display_name: '平台管理员', email: 'admin@demo.local', department: '企业数字化中心', position: '平台管理员' }, title: '申请', form_data: {}, form_schema_snapshot: { fields: [] }, status: 'pending', current_node_index: 0, flow_snapshot: [{ id: 'manager', index: 0, type: 'approval', name: '经理审批' }], nodes: [{ id: 9, node_index: 0, node_key: 'manager', timeout_hours: 24, approver_id: 'u-2', approver_name: '李四', status: 'pending', comment: null, acted_at: null }], actions: [], created_at: '2026-07-24T09:00:00Z', updated_at: '2026-07-24T09:00:00Z', submitted_at: '2026-07-24T09:00:00Z', completed_at: null }
+  let urged = false
+  await page.route('**/api/v1/approvals/requests/89/urge', async route => { urged = route.request().method() === 'PUT'; return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: detail }) }) })
+  await page.route('**/api/v1/approvals/requests/89', async route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: detail }) }))
+  await page.route('**/api/v1/approvals/users', async route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: seededUsers }) }))
+  await loginAsAdmin(page)
+  await page.goto('/modules/approval-center/89')
+  await expect(page.getByRole('button', { name: '催办' })).toBeVisible()
+  await page.getByRole('button', { name: '催办' }).click()
+  await expect.poll(() => urged).toBe(true)
+  detail.applicant_id = 'u-1'
+  await page.reload()
+  await expect(page.getByRole('button', { name: '催办' })).toHaveCount(0)
+})

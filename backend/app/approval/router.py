@@ -503,6 +503,7 @@ def _submit_process_app_request(body: SubmitRequest, user: User, db: Session) ->
         applicant_snapshot={
             "id": applicant.id,
             "display_name": applicant.display_name,
+            "email": applicant.email,
             "department": applicant.department,
             "position": applicant.position,
         },

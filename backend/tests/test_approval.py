@@ -272,6 +272,7 @@ def test_submit_snapshots_applicant_and_resolved_high_value_path(client, admin_h
     assert data["process_app_id"] == app["id"]
     assert data["process_version_id"] == app["version_id"]
     assert data["applicant_snapshot"]["position"]
+    assert data["applicant_snapshot"]["email"] == "admin@demo.local"
     assert data["form_data"] == {"amount": 120000, "item_name": "服务器"}
     assert [node["node_key"] for node in data["nodes"]] == ["manager", "director", "finance"]
     assert [node["node_index"] for node in data["nodes"]] == [0, 1, 2]
