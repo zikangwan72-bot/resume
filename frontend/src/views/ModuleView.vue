@@ -33,7 +33,8 @@ async function load() {
     failed.value = true
     if (axios.isAxiosError(error)) {
       errorStatus.value = error.response?.status ?? null
-      errorMessage.value = error.response?.data?.message || error.message
+      const detail = error.response?.data?.detail
+      errorMessage.value = typeof detail === 'string' ? detail : detail?.message || error.response?.data?.message || error.message
     } else {
       errorMessage.value = '网络连接异常，请稍后重试。'
     }

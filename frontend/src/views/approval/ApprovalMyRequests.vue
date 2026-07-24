@@ -55,3 +55,7 @@ onMounted(load)
     <a-list v-else class="record-list" :data-source="requests"><template #renderItem="{ item }"><a-list-item><a-button type="link" class="request-card" @click="router.push(`/modules/approval-center/${item.id}`)"><span class="request-info"><strong>{{ item.title }}</strong><small>{{ item.created_at.slice(0, 16).replace('T', ' ') }}</small></span><a-tag :color="statusTagMap[item.status]">{{ statusTextMap[item.status] }}</a-tag></a-button></a-list-item></template></a-list>
   </div>
 </template>
+
+<style scoped>
+.request-card { width:100%; align-items:flex-start; text-align:left; }
+</style>

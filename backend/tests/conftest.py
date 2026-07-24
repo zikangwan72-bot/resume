@@ -21,6 +21,10 @@ from app.main import app
 @pytest.fixture(autouse=True)
 def database():
     app.dependency_overrides.clear()
+    engine.dispose()
+    approval_engine.dispose()
+    Path("test_enterprise_ai.db").unlink(missing_ok=True)
+    Path("test_approval.db").unlink(missing_ok=True)
     Base.metadata.drop_all(bind=engine)
     ApprovalBase.metadata.drop_all(bind=approval_engine)
     initialize_database()
@@ -29,6 +33,8 @@ def database():
     app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=engine)
     ApprovalBase.metadata.drop_all(bind=approval_engine)
+    engine.dispose()
+    approval_engine.dispose()
 
 
 @pytest.fixture()

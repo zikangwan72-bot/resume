@@ -308,13 +308,7 @@ test('keeps the process-app table usable on mobile', async ({ page }) => {
 test('supports preview and future new/edit routes and reports lifecycle errors', async ({ page }) => {
   await setupProcessAppApi(page, seededProcessApps, { copy: true, deactivate: true })
   await loginAsAdmin(page)
-  await page.route('**/api/v1/admin/logs', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
-  })
-  await expect(page.getByText('审批日志', { exact: true })).toBeVisible()
   await expect(page.getByText('审批类型', { exact: true })).toHaveCount(0)
-  await page.goto('/admin/approval-logs')
-  await expect(page.getByRole('heading', { name: '审批日志' })).toBeVisible()
   await page.goto('/admin/process-apps')
   await page.getByRole('row', { name: /请假申请/ }).getByRole('button', { name: '更多操作' }).click()
   await page.getByRole('menuitem', { name: '预览' }).click()

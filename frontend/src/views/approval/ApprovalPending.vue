@@ -64,3 +64,7 @@ async function quickReject(item: PendingItem) {
     </a-list-item></template></a-list>
   </div>
 </template>
+
+<style scoped>
+.pending-main { width:100%; align-items:flex-start; text-align:left; }
+</style>
