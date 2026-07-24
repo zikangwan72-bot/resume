@@ -84,6 +84,24 @@ test('governance views render mocked AI values and smoke headings', async ({ pag
   await expect(page.getByRole('heading', { name: '个人资料' })).toBeVisible()
 })
 
+test('profile card body uses the available width instead of collapsing into the avatar column', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await loginAsAdmin(page)
+  await page.goto('/profile')
+
+  const layout = await page.evaluate(() => {
+    const card = document.querySelector('.profile-sheet')!.getBoundingClientRect()
+    const body = document.querySelector('.profile-sheet .ant-card-body')!.getBoundingClientRect()
+    const main = document.querySelector('.profile-main')!.getBoundingClientRect()
+    const name = document.querySelector('.profile-main h2')!.getBoundingClientRect()
+    return { cardWidth: card.width, bodyWidth: body.width, mainWidth: main.width, nameHeight: name.height }
+  })
+
+  expect(layout.bodyWidth).toBeGreaterThan(layout.cardWidth * 0.9)
+  expect(layout.mainWidth).toBeGreaterThan(layout.cardWidth * 0.7)
+  expect(layout.nameHeight).toBeLessThan(40)
+})
+
 test('approval and module failures stay distinct from empty responses and rows support keyboards', async ({ page }) => {
   let approvalAttempts = 0
   await page.route('**/api/v1/approvals/requests', (route) => {
