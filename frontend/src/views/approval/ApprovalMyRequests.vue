@@ -52,10 +52,75 @@ onMounted(load)
     <a-skeleton v-if="loading" active :paragraph="{ rows: 6 }" />
     <a-alert v-else-if="failed" type="error" show-icon message="申请记录加载失败"><template #action><a-button size="small" @click="load">重试</a-button></template></a-alert>
     <a-empty v-else-if="requests.length === 0" description="暂无申请记录" />
-    <a-list v-else class="record-list" :data-source="requests"><template #renderItem="{ item }"><a-list-item><a-button type="link" class="request-card" @click="router.push(`/modules/approval-center/${item.id}`)"><span class="request-info"><strong>{{ item.title }}</strong><small>{{ item.created_at.slice(0, 16).replace('T', ' ') }}</small></span><a-tag :color="statusTagMap[item.status]">{{ statusTextMap[item.status] }}</a-tag></a-button></a-list-item></template></a-list>
+    <a-list v-else class="record-list" :data-source="requests">
+      <template #renderItem="{ item }">
+        <a-list-item>
+          <button type="button" class="request-card" @click="router.push(`/modules/approval-center/${item.id}`)">
+            <span class="request-info">
+              <strong>{{ item.title }}</strong>
+              <small>{{ item.created_at.slice(0, 16).replace('T', ' ') }}</small>
+            </span>
+            <a-tag :color="statusTagMap[item.status]">{{ statusTextMap[item.status] }}</a-tag>
+          </button>
+        </a-list-item>
+      </template>
+    </a-list>
   </div>
 </template>
 
 <style scoped>
-.request-card { width:100%; align-items:flex-start; text-align:left; }
+.request-card {
+  width: 100%;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.2s, box-shadow 0.2s;
+}
+
+.request-card:hover {
+  border-color: #91caff;
+  background: #f5faff;
+}
+
+.request-card:focus-visible {
+  border-color: #1677ff;
+  outline: 2px solid rgba(22, 119, 255, 0.2);
+  outline-offset: 2px;
+}
+
+.request-info {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.request-info strong {
+  color: #1677ff;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.request-info small {
+  color: #8c8c8c;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.request-card .ant-tag {
+  flex: 0 0 auto;
+  margin-inline-end: 0;
+}
 </style>
