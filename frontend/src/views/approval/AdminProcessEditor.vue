@@ -13,6 +13,13 @@ const users = ref<ApprovalUser[]>([]); const flowIssues = ref<FlowValidationIssu
 const flowDesigner = ref<{ focusTarget: (id?: string) => void } | null>(null)
 const draft = reactive<ProcessAppDraft>({ code: '', name: '', category: '通用审批', description: '', form_schema: { fields: [] }, flow_schema: { nodes: [], edges: [] } })
 const isEdit = computed(() => typeof route.params.id === 'string')
+const visibleFlowIssues = computed(() => {
+  const errors = new Map<string, { issue: FlowValidationIssue; type: 'warning' | 'error' }>()
+  const keyFor = (issue: FlowValidationIssue) => `${issue.code}\u0000${issue.target_id ?? ''}\u0000${issue.message}`
+  flowIssues.value.forEach((issue) => errors.set(keyFor(issue), { issue, type: 'warning' }))
+  publishIssues.value.forEach((issue) => errors.set(keyFor(issue), { issue, type: 'error' }))
+  return [...errors.values()]
+})
 const formRules = { name: [{ required: true, whitespace: true, message: '请输入流程名称', trigger: 'blur' }], code: [{ required: true, whitespace: true, message: '请输入流程编号', trigger: 'blur' }, { pattern: /^[A-Za-z][A-Za-z0-9_-]*$/, message: '编号须以字母开头，只能使用字母、数字、下划线或连字符', trigger: 'blur' }], category: [{ required: true, message: '请选择流程分类', trigger: 'change' }] }
 const snapshot = () => JSON.stringify(draft)
 const dirty = computed(() => loaded.value && snapshot() !== baseline.value)
@@ -153,8 +160,7 @@ watch(() => route.params.id, () => { void load() })
         </div>
         <div v-show="step === 1" class="stage"><FormSchemaDesigner v-model="draft.form_schema" /></div>
         <div v-show="step === 2" class="stage flow-stage">
-          <a-alert v-for="issue in flowIssues" :key="`local-${issue.code}-${issue.target_id}`" class="definition-alert" type="warning" show-icon :message="issue.message" @click="focusDefinitionIssue(issue)" />
-          <a-alert v-for="issue in publishIssues" :key="`${issue.code}-${issue.target_id}`" class="definition-alert" type="error" show-icon :message="issue.message" @click="focusDefinitionIssue(issue)" />
+          <a-alert v-for="entry in visibleFlowIssues" :key="`${entry.issue.code}-${entry.issue.target_id}-${entry.issue.message}`" class="definition-alert" :type="entry.type" show-icon :message="entry.issue.message" @click="focusDefinitionIssue(entry.issue)" />
           <FlowSchemaDesigner ref="flowDesigner" v-model="draft.flow_schema" :users="users" :fields="draft.form_schema.fields" @validationChange="flowIssues = $event" />
         </div>
         <div v-show="step === 3" class="stage preview-stage">

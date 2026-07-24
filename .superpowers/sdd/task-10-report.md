@@ -36,3 +36,9 @@ Only Task 10 frontend designer, editor integration, types, focused E2E coverage,
 - Hydration validation now watches model, users, and fields together after the parent flushes state.
 - The editor listener now matches the emitted `validationChange` event exactly.
 - The isolated missing-approver Playwright test passed. The subsequent full focused-spec run was interrupted before a result was available.
+
+## Alert Deduplication Fix
+
+- Local and backend definition errors are combined by `code`, `target_id`, and `message` before rendering.
+- Matching backend errors retain error severity and the same click-to-focus behavior.
+- PASS: `surfaces publish validation errors on their flow target and publishes a saved draft`.
