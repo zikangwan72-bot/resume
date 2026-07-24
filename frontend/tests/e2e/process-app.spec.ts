@@ -520,3 +520,137 @@ test('normalizes legacy editor data and persists a successful PUT reload roundtr
   await page.getByRole('button', { name: '选择字段 legacy_items' }).click()
   await expect(page.getByLabel('明细列名称')).toHaveValue('kind')
 })
+
+test('designs a serial, countersign, and conditional approval graph then saves its controlled payload', async ({ page }) => {
+  let payload: any
+  await setupUserApi(page)
+  await page.route('**/api/v1/admin/process-apps', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    payload = route.request().postDataJSON()
+    return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { ...seededProcessApps[0], ...payload, id: 110, version_id: 110, current_version_id: 110 } }) })
+  })
+  await loginAsAdmin(page)
+  await page.goto('/admin/process-apps/new')
+  await page.getByLabel('流程名称').fill('采购条件审批')
+  await page.getByLabel('流程编号').fill('purchase-condition')
+  await page.getByRole('button', { name: '下一步' }).click()
+  await page.locator('[data-field-type="money"]').click()
+  await page.getByLabel('字段名称').fill('预计金额')
+  await page.getByRole('button', { name: '下一步' }).click()
+
+  await page.getByRole('button', { name: '单人审批' }).click()
+  await page.getByLabel('节点名称').fill('部门审批')
+  await page.getByLabel('审批人').click()
+  await page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').getByText('张三 | 产品研发部 | 产品经理', { exact: true }).click()
+  await page.getByRole('button', { name: '应用节点配置' }).click()
+  await page.getByRole('button', { name: '条件分支' }).click()
+  await page.getByLabel('条件字段').selectOption({ label: '预计金额' })
+  await page.getByLabel('比较方式').selectOption('gt')
+  await page.getByLabel('比较值').fill('100000')
+  await page.getByRole('button', { name: '应用节点配置' }).click()
+  await page.getByRole('button', { name: '会签' }).click()
+  await page.getByLabel('节点名称').fill('财务会签')
+  await page.getByLabel('审批人').click()
+  await page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').getByText('张三 | 产品研发部 | 产品经理', { exact: true }).click()
+  await page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').getByText('李四 | 财务管理部 | 财务专员', { exact: true }).click()
+  await page.getByRole('button', { name: '应用节点配置' }).click()
+  await expect(page.getByText('默认分支', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '保存草稿' }).click()
+  await expect(page).toHaveURL('/admin/process-apps/110/edit')
+  expect(payload.flow_schema.nodes).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: 'start' }),
+    expect.objectContaining({ type: 'end' }),
+    expect.objectContaining({ type: 'approval', approval_type: 'single', approver_id: 'u-1', allow_transfer: false }),
+    expect.objectContaining({ type: 'countersign', approval_type: 'counter_sign', approver_ids: ['u-1', 'u-2'] }),
+    expect.objectContaining({ type: 'condition' }),
+  ]))
+  expect(payload.flow_schema.edges).toEqual(expect.arrayContaining([
+    expect.objectContaining({ default: true }),
+    expect.objectContaining({ condition: { field_id: expect.any(String), operator: 'gt', value: 100000 } }),
+  ]))
+})
+
+test('surfaces publish validation errors on their flow target and publishes a saved draft', async ({ page }) => {
+  const app: any = {
+    ...seededProcessApps[0], id: 120, version_id: 120, current_version_id: 120, status: 'draft', version_status: 'draft',
+    form_schema: { fields: [{ id: 'amount', key: 'amount', type: 'money', label: '预计金额', required: true }] },
+    flow_schema: {
+      nodes: [
+        { id: 'start', type: 'start', name: '开始' },
+        { id: 'approval', type: 'approval', name: '部门审批', approval_type: 'single', approver_id: 'u-3', allow_transfer: false, timeout_hours: 0 },
+        { id: 'end', type: 'end', name: '结束' },
+      ], edges: [{ source: 'start', target: 'approval' }, { source: 'approval', target: 'end' }],
+    },
+  }
+  let updates = 0
+  let publishes = 0
+  await setupUserApi(page)
+  await page.route('**/api/v1/admin/process-apps/120', async (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: app }) })
+    if (route.request().method() === 'PUT') { updates += 1; Object.assign(app, route.request().postDataJSON()); return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: app }) }) }
+    return route.continue()
+  })
+  await page.route('**/api/v1/admin/process-apps/120/publish', async (route) => {
+    publishes += 1
+    if (publishes === 1) return route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ detail: { code: 'definition_invalid', errors: [{ code: 'inactive_approver', message: '审批人必须是启用员工', target_id: 'approval' }] } }) })
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { ...app, status: 'published', version_number: 2, version_status: 'published' } }) })
+  })
+  await loginAsAdmin(page)
+  await page.goto('/admin/process-apps/120/edit')
+  await page.getByRole('button', { name: '下一步' }).click()
+  await page.getByRole('button', { name: '下一步' }).click()
+  await page.getByRole('button', { name: '下一步' }).click()
+  await page.getByRole('button', { name: '发布流程' }).click()
+  await expect(page.getByText('审批人必须是启用员工')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '流程设计' })).toBeVisible()
+  await expect(page.locator('[data-flow-node-id="approval"]')).toBeFocused()
+  await page.getByRole('button', { name: '下一步' }).click()
+  await page.getByRole('button', { name: '发布流程' }).click()
+  await expect(page.getByText('流程已发布，当前版本 v2')).toBeVisible()
+  expect(updates).toBeGreaterThan(0)
+  expect(publishes).toBe(2)
+})
+
+test('shows local flow validation for a missing approver', async ({ page }) => {
+  const app: any = {
+    ...seededProcessApps[0], id: 130, version_id: 130, current_version_id: 130, status: 'draft', version_status: 'draft',
+    form_schema: { fields: [{ id: 'amount', key: 'amount', type: 'money', label: '预计金额', required: true }] },
+    flow_schema: { nodes: [{ id: 'start', type: 'start' }, { id: 'approval', type: 'approval', name: '待配置审批', approval_type: 'single', approver_id: '' }, { id: 'end', type: 'end' }], edges: [{ source: 'start', target: 'approval' }, { source: 'approval', target: 'end' }] },
+  }
+  await setupUserApi(page)
+  await page.route('**/api/v1/admin/process-apps/130', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: app }) }))
+  await loginAsAdmin(page)
+  await page.goto('/admin/process-apps/130/edit')
+  await page.getByRole('button', { name: '下一步' }).click()
+  await page.getByRole('button', { name: '下一步' }).click()
+  await expect(page.getByText('审批人必须是启用员工')).toBeVisible()
+  await page.getByText('审批人必须是启用员工').click()
+  await expect(page.locator('[data-flow-node-id="approval"]')).toBeFocused()
+})
+
+test('reorders and deletes a serial approval node without breaking the saved graph', async ({ page }) => {
+  const app: any = {
+    ...seededProcessApps[0], id: 140, version_id: 140, current_version_id: 140, status: 'draft', version_status: 'draft',
+    form_schema: { fields: [{ id: 'amount', key: 'amount', type: 'money', label: '预计金额', required: true }] },
+    flow_schema: { nodes: [{ id: 'start', type: 'start' }, { id: 'first', type: 'approval', name: '第一审批', approval_type: 'single', approver_id: 'u-1' }, { id: 'second', type: 'approval', name: '第二审批', approval_type: 'single', approver_id: 'u-2' }, { id: 'end', type: 'end' }], edges: [{ source: 'start', target: 'first' }, { source: 'first', target: 'second' }, { source: 'second', target: 'end' }] },
+  }
+  let payload: any
+  await setupUserApi(page)
+  await page.route('**/api/v1/admin/process-apps/140', async (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: app }) })
+    if (route.request().method() === 'PUT') { payload = route.request().postDataJSON(); Object.assign(app, payload); return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: app }) }) }
+    return route.continue()
+  })
+  await loginAsAdmin(page)
+  await page.goto('/admin/process-apps/140/edit')
+  await page.getByRole('button', { name: '下一步' }).click()
+  await page.getByRole('button', { name: '下一步' }).click()
+  await page.locator('[data-flow-node-id="second"]').click()
+  await page.getByLabel('上移节点').click()
+  await page.getByLabel('删除节点').click()
+  await page.getByRole('button', { name: '保存草稿' }).click()
+  await expect.poll(() => payload).toBeTruthy()
+  expect(payload.flow_schema.nodes.map((node: any) => node.id)).toEqual(expect.arrayContaining(['start', 'first', 'end']))
+  expect(payload.flow_schema.nodes.map((node: any) => node.id)).not.toContain('second')
+  expect(payload.flow_schema.edges).toEqual(expect.arrayContaining([{ source: 'start', target: 'first' }, { source: 'first', target: 'end' }]))
+})

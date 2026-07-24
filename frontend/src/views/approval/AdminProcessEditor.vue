@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { message } from 'ant-design-vue'
 import api from '@/api/client'
 import FormSchemaDesigner from '@/components/approval/FormSchemaDesigner.vue'
-import type { ApiEnvelope, ProcessApp, ProcessAppDraft } from '@/types/approval'
+import FlowSchemaDesigner from '@/components/approval/FlowSchemaDesigner.vue'
+import type { ApiEnvelope, ApprovalUser, FlowValidationIssue, ProcessApp, ProcessAppDraft } from '@/types/approval'
 
 const route = useRoute(); const router = useRouter(); const formRef = ref()
 const step = ref(0); const loading = ref(false); const saving = ref(false); const loaded = ref(false); const baseline = ref('')
+const users = ref<ApprovalUser[]>([]); const flowIssues = ref<FlowValidationIssue[]>([]); const publishIssues = ref<FlowValidationIssue[]>([])
+const flowDesigner = ref<{ focusTarget: (id?: string) => void } | null>(null)
 const draft = reactive<ProcessAppDraft>({ code: '', name: '', category: '通用审批', description: '', form_schema: { fields: [] }, flow_schema: { nodes: [], edges: [] } })
 const isEdit = computed(() => typeof route.params.id === 'string')
 const formRules = { name: [{ required: true, whitespace: true, message: '请输入流程名称', trigger: 'blur' }], code: [{ required: true, whitespace: true, message: '请输入流程编号', trigger: 'blur' }, { pattern: /^[A-Za-z][A-Za-z0-9_-]*$/, message: '编号须以字母开头，只能使用字母、数字、下划线或连字符', trigger: 'blur' }], category: [{ required: true, message: '请选择流程分类', trigger: 'change' }] }
@@ -78,15 +81,20 @@ function validateSchema() {
   return true
 }
 async function load() {
+  await loadUsers()
   if (!isEdit.value) { baseline.value = snapshot(); loaded.value = true; return }
   loading.value = true
   try { const response = await api.get<ApiEnvelope<ProcessApp>>(`/api/v1/admin/process-apps/${route.params.id}`); apply(response.data.data); baseline.value = snapshot(); loaded.value = true }
   catch (error) { message.error((error as any).response?.data?.detail ?? '流程应用加载失败') }
   finally { loading.value = false }
 }
+async function loadUsers() {
+  try { const response = await api.get<ApiEnvelope<ApprovalUser[]>>('/api/v1/admin/users'); users.value = response.data.data.filter((user) => user.is_active) }
+  catch { message.error('启用员工加载失败，请重试') }
+}
 async function next() { if (step.value === 0) { await formRef.value?.validate(); } if (step.value < 3) step.value += 1 }
 function previous() { if (step.value > 0) step.value -= 1 }
-async function save() {
+async function save(): Promise<ProcessApp | null> {
   try { await formRef.value?.validate() } catch { step.value = 0; return }
   if (!validateSchema()) return
   saving.value = true
@@ -95,7 +103,31 @@ async function save() {
     const response = isEdit.value ? await api.put<ApiEnvelope<ProcessApp>>(`/api/v1/admin/process-apps/${draft.id}`, payload) : await api.post<ApiEnvelope<ProcessApp>>('/api/v1/admin/process-apps', payload)
     apply(response.data.data); baseline.value = snapshot(); message.success('草稿已保存')
     if (!isEdit.value) await router.replace(`/admin/process-apps/${draft.id}/edit`)
-  } catch (error) { message.error((error as any).response?.data?.detail ?? '草稿保存失败，请重试') } finally { saving.value = false }
+    return response.data.data
+  } catch (error) { message.error((error as any).response?.data?.detail ?? '草稿保存失败，请重试'); return null } finally { saving.value = false }
+}
+async function focusDefinitionIssue(issue: FlowValidationIssue) {
+  const field = draft.form_schema.fields.find((item) => item.id === issue.target_id)
+  if (field) { step.value = 1; await nextTick(); document.querySelector<HTMLElement>(`[data-field-id="${CSS.escape(field.id)}"]`)?.focus(); return }
+  step.value = 2; await nextTick(); flowDesigner.value?.focusTarget(issue.target_id)
+}
+async function publish() {
+  publishIssues.value = []
+  const saved = await save()
+  if (!saved?.id) return
+  saving.value = true
+  try {
+    const response = await api.post<ApiEnvelope<ProcessApp>>(`/api/v1/admin/process-apps/${saved.id}/publish`)
+    apply(response.data.data); baseline.value = snapshot()
+    message.success(`流程已发布，当前版本 v${response.data.data.version_number ?? ''}`)
+    await router.push('/admin/process-apps')
+  } catch (error) {
+    const detail = (error as any).response?.data?.detail
+    if (detail?.code === 'definition_invalid' && Array.isArray(detail.errors)) {
+      publishIssues.value = detail.errors
+      await focusDefinitionIssue(detail.errors[0])
+    } else message.error(detail ?? '发布失败，请重试')
+  } finally { saving.value = false }
 }
 function beforeUnload(event: BeforeUnloadEvent) { if (dirty.value) { event.preventDefault(); event.returnValue = '' } }
 onMounted(() => { void load(); window.addEventListener('beforeunload', beforeUnload) }); onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
@@ -120,15 +152,26 @@ watch(() => route.params.id, () => { void load() })
           </a-form>
         </div>
         <div v-show="step === 1" class="stage"><FormSchemaDesigner v-model="draft.form_schema" /></div>
-        <div v-show="step === 2" class="stage placeholder"><a-empty description="流程设计将在 Task 10 实现" /></div>
-        <div v-show="step === 3" class="stage placeholder"><a-empty description="预览发布将在后续任务实现" /></div>
-        <footer class="editor-footer"><a-button v-if="step > 0" @click="previous">上一环节</a-button><span class="footer-fill" /><a-button :loading="saving" aria-label="保存草稿" @click="save">保存草稿</a-button><a-button v-if="step < 3" type="primary" @click="next">下一步</a-button></footer>
+        <div v-show="step === 2" class="stage flow-stage">
+          <a-alert v-for="issue in flowIssues" :key="`local-${issue.code}-${issue.target_id}`" class="definition-alert" type="warning" show-icon :message="issue.message" @click="focusDefinitionIssue(issue)" />
+          <a-alert v-for="issue in publishIssues" :key="`${issue.code}-${issue.target_id}`" class="definition-alert" type="error" show-icon :message="issue.message" @click="focusDefinitionIssue(issue)" />
+          <FlowSchemaDesigner ref="flowDesigner" v-model="draft.flow_schema" :users="users" :fields="draft.form_schema.fields" @validation-change="flowIssues = $event" />
+        </div>
+        <div v-show="step === 3" class="stage preview-stage">
+          <div class="preview-heading"><div><h2>预览发布</h2><p>确认应用元信息、表单字段与审批流后发布新版本。</p></div><a-tag :color="flowIssues.length ? 'warning' : 'success'">{{ flowIssues.length ? `${flowIssues.length} 项流程校验提示` : '流程校验通过' }}</a-tag></div>
+          <div class="preview-grid">
+            <section><h3>基本信息</h3><dl><dt>名称</dt><dd>{{ draft.name || '未命名流程' }}</dd><dt>编号</dt><dd>{{ draft.code || '未设置' }}</dd><dt>分类</dt><dd>{{ draft.category }}</dd></dl></section>
+            <section><h3>表单字段</h3><p v-if="!draft.form_schema.fields.length" class="muted">尚未配置业务字段</p><ul v-else><li v-for="field in draft.form_schema.fields" :key="field.id">{{ field.label || field.id }} <span>{{ field.type }}</span></li></ul></section>
+            <section><h3>审批流</h3><p>{{ draft.flow_schema.nodes.filter((node) => node.type === 'approval' || node.type === 'countersign').length }} 个审批节点，{{ draft.flow_schema.nodes.filter((node) => node.type === 'condition').length }} 个条件分支</p><a-button @click="step = 2">查看流程设计</a-button></section>
+          </div>
+        </div>
+        <footer class="editor-footer"><a-button v-if="step > 0" @click="previous">上一环节</a-button><span class="footer-fill" /><a-button :loading="saving" aria-label="保存草稿" @click="save">保存草稿</a-button><a-button v-if="step < 3" type="primary" @click="next">下一步</a-button><a-button v-else type="primary" :loading="saving" @click="publish">发布流程</a-button></footer>
       </section>
     </a-spin>
   </div>
 </template>
 
 <style scoped>
-.editor-page { max-width: 1440px; } .editor-shell { display: grid; gap: 20px; padding: 20px; border: 1px solid #f0f0f0; background: #fff; } .stage { min-width: 0; } .basic-stage { max-width: 720px; } .basic-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; } .basic-form :deep(.ant-form-item:last-child) { grid-column: 1 / -1; } .placeholder { min-height: 380px; display: grid; place-items: center; background: #fafafa; } .editor-footer { display: flex; align-items: center; gap: 8px; padding-top: 4px; border-top: 1px solid #f0f0f0; } .footer-fill { flex: 1; }
-@media (max-width: 760px) { .editor-page { padding: 0; } .editor-shell { padding: 14px; border-left: 0; border-right: 0; } .basic-form { grid-template-columns: 1fr; } .editor-footer { position: static; padding: 14px 0 0; background: #fff; flex-wrap: wrap; } }
+.editor-page { max-width: 1440px; } .editor-shell { display: grid; gap: 20px; padding: 20px; background: #fff; } .stage { min-width: 0; } .basic-stage { max-width: 720px; } .basic-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; } .basic-form :deep(.ant-form-item:last-child) { grid-column: 1 / -1; } .flow-stage { display: grid; gap: 12px; } .definition-alert { cursor: pointer; } .preview-stage { display: grid; gap: 16px; } .preview-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-bottom: 1px solid #e7ebf1; padding-bottom: 12px; } .preview-heading h2, .preview-grid h3 { margin: 0; } .preview-heading p, .muted { margin: 4px 0 0; color: #687386; } .preview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; } .preview-grid section { min-width: 0; padding-right: 16px; border-right: 1px solid #edf0f4; } .preview-grid section:last-child { border-right: 0; } dl { display: grid; grid-template-columns: 64px 1fr; gap: 8px; margin: 14px 0 0; } dt, .preview-grid li span { color: #687386; } dd { margin: 0; overflow-wrap: anywhere; } .preview-grid ul { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; } .preview-grid li { display: flex; justify-content: space-between; gap: 8px; } .editor-footer { display: flex; align-items: center; gap: 8px; padding-top: 4px; border-top: 1px solid #f0f0f0; } .footer-fill { flex: 1; }
+@media (max-width: 760px) { .editor-page { padding: 0; } .editor-shell { padding: 14px; } .basic-form, .preview-grid { grid-template-columns: 1fr; } .preview-grid section { padding: 0 0 14px; border-right: 0; border-bottom: 1px solid #edf0f4; } .preview-grid section:last-child { border-bottom: 0; } .preview-heading .ant-tag { display: none; } .editor-footer { position: static; padding: 14px 0 0; background: #fff; flex-wrap: wrap; } }
 </style>

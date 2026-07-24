@@ -44,6 +44,8 @@ export interface FormField {
   columns?: DetailColumn[]
 }
 
+export type FormFieldDefinition = FormField
+
 export interface FormSchema { fields: FormField[] }
 
 export type DetailColumnType = 'text' | 'number' | 'money' | 'date' | 'select'
@@ -93,6 +95,8 @@ export interface FlowNodeSchema {
   approval_type?: ApprovalMode
   approver_id?: string
   approver_ids?: string[]
+  allow_transfer?: boolean
+  timeout_hours?: number
   [key: string]: unknown
 }
 
@@ -106,6 +110,12 @@ export interface FlowEdgeSchema {
 export interface FlowSchema {
   nodes: FlowNodeSchema[]
   edges: FlowEdgeSchema[]
+}
+
+export interface FlowValidationIssue {
+  code: string
+  message: string
+  target_id?: string
 }
 
 export interface ProcessVersion {
