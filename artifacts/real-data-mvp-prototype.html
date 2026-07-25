@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Enterprise AI Suite · 真实数据 MVP 原型</title>
+  <style>
+    :root { font-family: Inter, "Microsoft YaHei", sans-serif; color: #172033; background: #f5f7fa; --blue:#1677ff; --line:#e7ebf0; --muted:#6b7280; }
+    * { box-sizing: border-box; } body { margin:0; background:#f5f7fa; }
+    .shell { min-height:100vh; display:grid; grid-template-columns:230px 1fr; }
+    aside { background:#071a2e; color:#d6e2ef; padding:22px 14px; }
+    .brand { font-weight:700; font-size:18px; padding:0 10px 22px; border-bottom:1px solid #1d334b; }
+    .brand small { display:block; font-size:11px; color:#8ca1b5; font-weight:400; margin-top:5px; }
+    nav { display:grid; gap:6px; margin-top:20px; } nav button { border:0; background:transparent; color:#b8c8d9; padding:11px 12px; text-align:left; border-radius:6px; cursor:pointer; font-size:14px; }
+    nav button.active, nav button:hover { color:white; background:#1677ff; }
+    main { padding:28px 34px; max-width:1500px; width:100%; margin:auto; }
+    header { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; margin-bottom:24px; }
+    h1,h2,h3,p { margin-top:0; } h1 { margin-bottom:8px; font-size:30px; } h2 { font-size:20px; margin-bottom:16px; } p { color:var(--muted); }
+    .eyebrow { color:var(--blue); font-size:11px; font-weight:700; letter-spacing:.08em; margin-bottom:8px; }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; } button,.button { border:1px solid #d9e0e8; background:white; padding:9px 14px; border-radius:6px; cursor:pointer; font-size:14px; } button.primary { background:var(--blue); color:white; border-color:var(--blue); }
+    .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:22px; } .card,.panel { background:white; border:1px solid var(--line); border-radius:8px; padding:20px; box-shadow:0 3px 12px rgba(20,40,70,.04); }
+    .card span { color:var(--muted); font-size:13px; } .card strong { display:block; font-size:28px; margin-top:8px; }
+    .grid { display:grid; grid-template-columns:1.3fr 1fr; gap:18px; } .wide { grid-column:1/-1; }
+    .tabs { display:flex; gap:22px; border-bottom:1px solid var(--line); margin-bottom:18px; } .tabs button { border:0; border-bottom:2px solid transparent; background:transparent; border-radius:0; padding:10px 2px; } .tabs button.active { color:var(--blue); border-bottom-color:var(--blue); }
+    table { width:100%; border-collapse:collapse; font-size:13px; } th,td { padding:12px 10px; border-bottom:1px solid #eef1f4; text-align:left; vertical-align:top; } th { color:#667085; font-weight:500; background:#fafbfc; }
+    .tag { display:inline-block; padding:3px 8px; border-radius:12px; font-size:12px; background:#eaf3ff; color:#1677ff; } .tag.warn { background:#fff7e6; color:#d46b08; } .tag.danger { background:#fff1f0; color:#cf1322; } .tag.ok { background:#f6ffed; color:#389e0d; }
+    .flow { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; } .step { padding:14px; border:1px solid var(--line); border-radius:6px; } .step b { display:block; margin-bottom:7px; } .step small { color:var(--muted); }
+    .form { display:grid; gap:13px; } label { display:grid; gap:6px; font-size:13px; color:#475467; } input,textarea,select { width:100%; padding:10px 11px; border:1px solid #d9e0e8; border-radius:6px; font:inherit; } textarea { min-height:100px; resize:vertical; }
+    .hidden { display:none !important; } .notice { padding:12px 14px; background:#eaf3ff; border:1px solid #b7d7ff; color:#1554a3; border-radius:6px; margin-bottom:18px; } .empty { text-align:center; color:var(--muted); padding:30px; }
+    @media(max-width:900px){ .shell{grid-template-columns:1fr;} aside{position:static;} .cards{grid-template-columns:repeat(2,1fr);} .grid{grid-template-columns:1fr;} main{padding:22px 16px;} } @media(max-width:540px){.cards{grid-template-columns:1fr;} .flow{grid-template-columns:1fr 1fr;} header{display:block;} .actions{margin-top:15px;} }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside><div class="brand">Enterprise AI<small>真实数据 MVP 原型 · 仅用于流程确认</small></div><nav>
+    <button class="active" data-page="assets">全资产管理</button><button data-page="recruitment">招聘系统</button>
+  </nav></aside>
+  <main>
+    <section id="assets">
+      <header><div><div class="eyebrow">ASSET LIFECYCLE</div><h1>全资产管理</h1><p>台账、盘点、差异复核和处置归档，后续接入异常识别。</p></div><div class="actions"><button onclick="showAssetForm()">新增资产</button><button class="primary" onclick="showTaskForm()">新建盘点任务</button></div></header>
+      <div class="cards"><div class="card"><span>资产总数</span><strong id="assetCount">128</strong></div><div class="card"><span>资产总值</span><strong>¥1,280万</strong></div><div class="card"><span>盘点完成率</span><strong>83%</strong></div><div class="card"><span>待处理异常</span><strong id="exceptionCount">2</strong></div></div>
+      <div class="tabs"><button class="active" data-tab="asset-overview">运营总览</button><button data-tab="asset-ledger">资产台账</button><button data-tab="inventory">盘点工作台</button><button data-tab="exceptions">异常处置</button></div>
+      <div id="asset-overview" class="tab-content"><div class="grid"><div class="panel"><h2>资产盘点工作流</h2><div class="flow"><div class="step"><b>1 建立任务</b><small>选择区域和资产范围</small></div><div class="step"><b>2 扫码盘点</b><small>记录账实状态</small></div><div class="step"><b>3 差异复核</b><small>确认异常原因</small></div><div class="step"><b>4 处置归档</b><small>保留处理记录</small></div></div></div><div class="panel"><h2>资产分布</h2><p>办公设备　████████████ 62%</p><p>IT设备　██████████ 48%</p><p>生产工具　██████ 31%</p></div></div></div>
+      <div id="asset-ledger" class="tab-content hidden"><div class="panel"><h2>资产台账</h2><table><thead><tr><th>资产编号</th><th>名称</th><th>部门</th><th>责任人</th><th>状态</th><th>操作</th></tr></thead><tbody id="assetRows"><tr><td>BYD-LAP-2026-001</td><td>研发笔记本电脑</td><td>智能化研发试制部</td><td>王明</td><td><span class="tag ok">在用</span></td><td><button onclick="alert('原型：打开资产详情')">查看</button></td></tr><tr><td>BYD-CAM-2026-033</td><td>工业相机</td><td>质量检测部</td><td>周强</td><td><span class="tag warn">维修中</span></td><td><button onclick="alert('原型：打开资产详情')">查看</button></td></tr></tbody></table></div></div>
+      <div id="inventory" class="tab-content hidden"><div class="panel"><h2>盘点任务</h2><table><thead><tr><th>任务</th><th>负责人</th><th>进度</th><th>异常</th><th>截止日期</th><th>操作</th></tr></thead><tbody><tr><td>深圳办公与研发资产</td><td>资产管理员</td><td>86%</td><td><span class="tag danger">18条</span></td><td>2026-07-31</td><td><button onclick="alert('原型：进入扫码盘点')">进入盘点</button></td></tr><tr><td>西安生产与办公资产</td><td>区域资产专员</td><td>82%</td><td><span class="tag warn">11条</span></td><td>2026-08-05</td><td><button onclick="alert('原型：进入差异复核')">复核</button></td></tr></tbody></table></div></div>
+      <div id="exceptions" class="tab-content hidden"><div class="panel"><h2>异常处置</h2><table><thead><tr><th>资产</th><th>异常类型</th><th>描述</th><th>状态</th><th>操作</th></tr></thead><tbody><tr><td>工业相机 BYD-CAM-2026-033</td><td>盘亏待核实</td><td>需要核对借用和维修记录</td><td><span class="tag danger">待核实</span></td><td><button class="primary" onclick="archiveException(this)">归档</button></td></tr></tbody></table></div></div>
+    </section>
+    <section id="recruitment" class="hidden">
+      <header><div><div class="eyebrow">RECRUITMENT MVP</div><h1>招聘系统</h1><p>学生端岗位浏览和投递，管理端岗位与候选人筛选。</p></div><div class="actions"><button onclick="switchRecruitTab('student')">学生端</button><button class="primary" onclick="switchRecruitTab('admin')">管理端</button></div></header>
+      <div class="notice">这是流程原型。最终页面将通过 FastAPI 读取 SQLite，学生投递后管理端实时看到候选人记录。</div>
+      <div class="tabs"><button class="active" data-recruit-tab="student">学生投递端</button><button data-recruit-tab="admin">管理端</button></div>
+      <div id="recruit-student"><div class="grid"><div class="panel"><h2>开放岗位</h2><table><thead><tr><th>岗位</th><th>部门</th><th>地点</th><th>操作</th></tr></thead><tbody><tr><td>AI产品经理实习生</td><td>企业AI应用部</td><td>Singapore</td><td><button class="primary" onclick="showApplication()">立即投递</button></td></tr><tr><td>数据产品实习生</td><td>数据平台组</td><td>Kuala Lumpur</td><td><button onclick="showApplication()">查看详情</button></td></tr></tbody></table></div><div class="panel"><h2>投递流程</h2><div class="flow"><div class="step"><b>1 看岗位</b><small>了解要求</small></div><div class="step"><b>2 填信息</b><small>提交简历文本</small></div><div class="step"><b>3 等待初筛</b><small>管理端处理</small></div><div class="step"><b>4 面试沟通</b><small>状态持续更新</small></div></div></div></div></div>
+      <div id="recruit-admin" class="hidden"><div class="grid"><div class="panel"><h2>岗位管理</h2><button class="primary" onclick="alert('原型：打开新增岗位表单')">新增岗位</button><table><thead><tr><th>岗位</th><th>状态</th><th>操作</th></tr></thead><tbody><tr><td>AI产品经理实习生</td><td><span class="tag ok">开放</span></td><td><button onclick="alert('原型：编辑岗位')">编辑</button></td></tr><tr><td>数据产品实习生</td><td><span class="tag ok">开放</span></td><td><button onclick="alert('原型：编辑岗位')">编辑</button></td></tr></tbody></table></div><div class="panel"><h2>候选人池</h2><table><thead><tr><th>候选人</th><th>岗位</th><th>状态</th><th>操作</th></tr></thead><tbody><tr><td>等待学生投递</td><td>—</td><td><span class="tag">暂无</span></td><td>—</td></tr></tbody></table></div></div></div>
+    </section>
+  </main>
+</div>
+<div id="modal" class="hidden" style="position:fixed;inset:0;background:#0006;display:grid;place-items:center;padding:18px"><div class="panel" style="width:min(560px,100%)"><h2 id="modalTitle">表单</h2><form class="form" onsubmit="submitPrototype(event)"><label>姓名<input id="name" required placeholder="请输入" /></label><label>邮箱<input id="email" type="email" required placeholder="name@example.com" /></label><label>资产/岗位说明<textarea id="note" placeholder="请输入说明"></textarea></label><div class="actions"><button type="button" onclick="closeModal()">取消</button><button class="primary" type="submit">提交</button></div></form></div></div>
+<script>
+  const modal=document.querySelector('#modal'); const pages=document.querySelectorAll('aside button');
+  pages.forEach(b=>b.onclick=()=>{pages.forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('main>section').forEach(s=>s.classList.toggle('hidden',s.id!==b.dataset.page));});
+  document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{const group=b.closest('section');group.querySelectorAll('[data-tab]').forEach(x=>x.classList.remove('active'));b.classList.add('active');group.querySelectorAll('.tab-content').forEach(x=>x.classList.toggle('hidden',x.id!==b.dataset.tab));});
+  document.querySelectorAll('[data-recruit-tab]').forEach(b=>b.onclick=()=>switchRecruitTab(b.dataset.recruitTab));
+  function switchRecruitTab(tab){document.querySelectorAll('[data-recruit-tab]').forEach(x=>x.classList.toggle('active',x.dataset.recruitTab===tab));document.querySelector('#recruit-student').classList.toggle('hidden',tab!=='student');document.querySelector('#recruit-admin').classList.toggle('hidden',tab!=='admin');}
+  function showAssetForm(){document.querySelector('#modalTitle').textContent='新增资产（原型）';modal.classList.remove('hidden');}
+  function showTaskForm(){document.querySelector('#modalTitle').textContent='新建盘点任务（原型）';modal.classList.remove('hidden');}
+  function showApplication(){document.querySelector('#modalTitle').textContent='提交岗位申请（原型）';modal.classList.remove('hidden');}
+  function closeModal(){modal.classList.add('hidden');}
+  function submitPrototype(e){e.preventDefault();alert('原型提交成功。正式版本将写入 SQLite 数据库。');closeModal();}
+  function archiveException(btn){btn.closest('tr').querySelector('.tag').textContent='已归档';btn.closest('tr').querySelector('.tag').className='tag ok';btn.remove();document.querySelector('#exceptionCount').textContent='1';}
+</script>
+</body>
+</html>

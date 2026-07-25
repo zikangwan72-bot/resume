@@ -26,9 +26,29 @@ const router = createRouter({
         },
         // ── 审批模块路由 ──
         {
+          path: 'modules/resume-screening',
+          component: () => import('@/views/ResumeScreeningView.vue'),
+          meta: { title: 'AI简历筛选', permission: 'resume:view' },
+        },
+        {
+          path: 'recruitment/student',
+          component: () => import('@/views/recruitment/RecruitmentStudentView.vue'),
+          meta: { title: '学生投递端', permission: 'resume:view' },
+        },
+        {
+          path: 'recruitment/admin',
+          component: () => import('@/views/recruitment/RecruitmentAdminView.vue'),
+          meta: { title: '招聘管理端', permission: 'resume:view' },
+        },
+        {
           path: 'modules/approval-center',
           component: () => import('@/views/approval/ApprovalHome.vue'),
           meta: { title: '审批中心', permission: 'approval:view' },
+        },
+        {
+          path: 'modules/asset-management',
+          component: () => import('@/views/AssetManagementView.vue'),
+          meta: { title: '全资产管理', permission: 'asset:view' },
         },
         {
           path: 'modules/approval-center/requests',

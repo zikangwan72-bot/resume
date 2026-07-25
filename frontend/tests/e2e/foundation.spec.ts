@@ -25,8 +25,6 @@ test('admin can enter the four-module foundation on desktop and mobile', async (
   })
 
   const modules = [
-    ['resume-screening', 'AI简历筛选'],
-    ['asset-management', '全资产管理'],
     ['service-desk', '企业IT服务台'],
   ]
   for (const [key, title] of modules) {
@@ -34,6 +32,14 @@ test('admin can enter the four-module foundation on desktop and mobile', async (
     await expect(page.getByRole('heading', { name: title })).toBeVisible()
     await expect(page.getByText('Foundation only')).toBeVisible()
   }
+
+  await page.goto('/modules/resume-screening')
+  await expect(page.getByRole('heading', { name: '招聘系统' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '进入学生端' })).toBeVisible()
+
+  await page.goto('/modules/asset-management')
+  await expect(page.getByRole('heading', { name: '全资产管理' })).toBeVisible()
+  await expect(page.getByText('资产盘点工作流')).toBeVisible()
 
   await page.goto('/modules/approval-center')
   await expect(page.getByRole('heading', { name: '流程审批中心' })).toBeVisible()
@@ -111,9 +117,9 @@ test('approval and module failures stay distinct from empty responses and rows s
       : { data: approvalAttempts === 2 ? [] : [{ id: 77, title: '采购申请', status: 'pending', created_at: '2026-07-23T10:00:00' }] }
     return route.fulfill({ status: approvalAttempts === 1 ? 500 : 200, contentType: 'application/json', body: JSON.stringify(payload) })
   })
-  await page.route('**/api/v1/modules/asset-management/summary', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: '模块服务暂不可用' }) }))
   await loginAsAdmin(page)
-  await page.goto('/modules/asset-management')
+  await page.route('**/api/v1/modules/service-desk/summary', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: '模块服务暂不可用' }) }))
+  await page.goto('/modules/service-desk')
   await expect(page.getByText('模块服务暂不可用')).toBeVisible()
   await expect(page.getByRole('button', { name: /重\s*试/ })).toBeVisible()
 
@@ -148,4 +154,12 @@ test('product demo role is blocked from audit API and menu', async ({ page }) =>
     headers: { Authorization: `Bearer ${token}` },
   })
   expect(response.status()).toBe(403)
+})
+
+test('login page only offers platform admin and product demo roles', async ({ page }) => {
+  await page.goto('/login')
+  await expect(page.locator('.role-option')).toHaveCount(2)
+  await expect(page.getByRole('button', { name: /平台管理员/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /产品演示用户/ })).toBeVisible()
+  await expect(page.getByText('审计查看者')).toHaveCount(0)
 })
