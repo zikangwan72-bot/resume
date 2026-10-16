@@ -15,7 +15,6 @@ from app.core.logging import configure_logging, request_id_var
 from app.db.seed import initialize_schema, seed_demo_data
 from app.screening.router import router as screening_router
 
-
 logger = logging.getLogger("app.main")
 
 

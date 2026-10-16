@@ -1,5 +1,5 @@
-from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from time import monotonic
 
 import httpx

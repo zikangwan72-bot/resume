@@ -23,8 +23,8 @@ from app.core.security import (
 from app.db.database import get_db
 from app.db.models import AIRun, AuditLog, Notification, User
 from app.db.seed import DEMO_PASSWORD, DEMO_USERS
-from app.integrations.supabase import get_supabase_status
 from app.integrations.storage import StorageUploadError, upload_bytes
+from app.integrations.supabase import get_supabase_status
 
 router = APIRouter()
 logger = logging.getLogger("app.auth")
@@ -175,7 +175,9 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         account_login_limiter.retry_after(email), ip_login_limiter.retry_after(client_ip)
     )
     if retry_after:
-        logger.warning("login throttled for %s from %s (retry in %ss)", email, client_ip, retry_after)
+        logger.warning(
+            "login throttled for %s from %s (retry in %ss)", email, client_ip, retry_after
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many failed login attempts, please try again later",

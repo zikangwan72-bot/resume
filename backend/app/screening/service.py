@@ -11,10 +11,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.business.models import ResumeDocument, ScreeningJob, ScreeningResult
+from app.core.config import settings
 from app.db.models import AIRun
 from app.integrations import llm
 from app.integrations.storage import StorageUploadError, upload_bytes
-from app.core.config import settings
 from app.screening.parser import ResumeParseError, UnsupportedResumeFile, extract_text
 from app.screening.schemas import ReviewUpdate, ScreeningJobCreate, ScreeningJobUpdate
 

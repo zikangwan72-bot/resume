@@ -8,8 +8,8 @@ from sqlalchemy import inspect, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 
-from app.approval.database import ApprovalSessionLocal, approval_engine, get_approval_db
 from app.approval.admin_router import _overdue_condition
+from app.approval.database import ApprovalSessionLocal, approval_engine, get_approval_db
 from app.approval.models import (
     ApprovalNode,
     ApprovalRequest,

@@ -2,8 +2,7 @@ import csv
 import hmac
 import io
 import socket
-from base64 import b64encode
-from base64 import b64decode
+from base64 import b64decode, b64encode
 from datetime import UTC, datetime
 from hashlib import sha256
 from secrets import token_urlsafe
@@ -19,7 +18,16 @@ from app.approval.database import get_approval_db
 from app.approval.models import ApprovalUser
 from app.approval.serializers import serialize_approval_user
 from app.business.models import Asset, AssetException, InventoryRecord, InventoryTask
-from app.business.schemas import AssetCreate, AssetImportCommit, AssetUpdate, InventoryRecordUpdate, InventoryTaskCreate, InventoryTaskUpdate, MobileInventorySubmit, ResolveExceptionRequest
+from app.business.schemas import (
+    AssetCreate,
+    AssetImportCommit,
+    AssetUpdate,
+    InventoryRecordUpdate,
+    InventoryTaskCreate,
+    InventoryTaskUpdate,
+    MobileInventorySubmit,
+    ResolveExceptionRequest,
+)
 from app.core.config import settings
 from app.core.security import require_permission
 from app.db.database import get_db

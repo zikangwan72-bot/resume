@@ -7,7 +7,12 @@ from app.core.security import require_permission
 from app.db.database import get_db
 from app.db.models import User
 from app.integrations import llm
-from app.screening.schemas import ReviewUpdate, ScreeningJobCreate, ScreeningJobUpdate, ScreeningTagSuggestionRequest
+from app.screening.schemas import (
+    ReviewUpdate,
+    ScreeningJobCreate,
+    ScreeningJobUpdate,
+    ScreeningTagSuggestionRequest,
+)
 from app.screening.service import (
     create_job,
     dashboard,
