@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     # None = seed only in development/test. Seeding rewrites demo users, so
     # set SEED_DEMO=false when a development backend points at shared data.
     seed_demo: bool | None = None
+    log_level: str = "INFO"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
