@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.approval import router as approval_router
+from app.approval import workflow as approval_workflow
 from app.approval.database import ApprovalSessionLocal
 from app.approval.models import ApprovalAction, ApprovalUser, ProcessVersion
 
@@ -343,9 +344,7 @@ def test_idempotency_integrity_error_fallback_returns_the_existing_request(
     created = client.post("/api/v1/approvals/requests", headers=admin_headers, json=body)
     assert created.status_code == 201
 
-    from app.approval import router as approval_router
-
-    original_lookup = approval_router._existing_idempotent_request
+    original_lookup = approval_workflow._existing_idempotent_request
     lookup_count = 0
 
     def race_lookup(db, applicant_id, idempotency_key):
@@ -355,7 +354,7 @@ def test_idempotency_integrity_error_fallback_returns_the_existing_request(
             return None
         return original_lookup(db, applicant_id, idempotency_key)
 
-    monkeypatch.setattr(approval_router, "_existing_idempotent_request", race_lookup)
+    monkeypatch.setattr(approval_workflow, "_existing_idempotent_request", race_lookup)
     retried = client.post("/api/v1/approvals/requests", headers=admin_headers, json=body)
 
     assert retried.status_code == 200
@@ -875,7 +874,7 @@ def test_terminal_revoke_and_urge_return_conflict_without_new_urge_action(
 def test_concurrent_approvals_consume_once_and_countersign_advances_once(
     client, admin_headers, db_session, monkeypatch
 ):
-    original_consume = approval_router._consume_pending_node
+    original_consume = approval_workflow._consume_pending_node
 
     def concurrent_approvals(node_user_pairs):
         barrier = Barrier(len(node_user_pairs))
@@ -884,7 +883,7 @@ def test_concurrent_approvals_consume_once_and_countersign_advances_once(
             barrier.wait(timeout=5)
             return original_consume(db, node, *args)
 
-        monkeypatch.setattr(approval_router, "_consume_pending_node", synchronized_consume)
+        monkeypatch.setattr(approval_workflow, "_consume_pending_node", synchronized_consume)
 
         def approve(item):
             node_id, actor_id, actor_name = item
@@ -906,7 +905,7 @@ def test_concurrent_approvals_consume_once_and_countersign_advances_once(
                 futures = [executor.submit(approve, item) for item in node_user_pairs]
                 return [future.result(timeout=10) for future in futures]
         finally:
-            monkeypatch.setattr(approval_router, "_consume_pending_node", original_consume)
+            monkeypatch.setattr(approval_workflow, "_consume_pending_node", original_consume)
 
     app_definition = _single_step_definition()
     app_definition["flow_schema"]["nodes"][1]["allow_transfer"] = True
@@ -972,14 +971,14 @@ def test_transfer_race_prevents_stale_approver_from_consuming_reassigned_node(
     node_id = request["nodes"][0]["id"]
     old_action_ready = Event()
     release_old_action = Event()
-    original_consume = approval_router._consume_pending_node
+    original_consume = approval_workflow._consume_pending_node
 
     def paused_consume(db, node, *args):
         old_action_ready.set()
         assert release_old_action.wait(timeout=5)
         return original_consume(db, node, *args)
 
-    monkeypatch.setattr(approval_router, "_consume_pending_node", paused_consume)
+    monkeypatch.setattr(approval_workflow, "_consume_pending_node", paused_consume)
 
     def stale_action():
         with ApprovalSessionLocal() as db:
@@ -1034,14 +1033,14 @@ def test_revoke_racing_terminal_approval_preserves_revoked_status(
     ).json()["data"]
     approval_ready = Event()
     release_approval = Event()
-    original_consume = approval_router._consume_pending_node
+    original_consume = approval_workflow._consume_pending_node
 
     def paused_consume(db, node, *args):
         approval_ready.set()
         assert release_approval.wait(timeout=5)
         return original_consume(db, node, *args)
 
-    monkeypatch.setattr(approval_router, "_consume_pending_node", paused_consume)
+    monkeypatch.setattr(approval_workflow, "_consume_pending_node", paused_consume)
 
     def approve():
         with ApprovalSessionLocal() as db:
