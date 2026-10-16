@@ -22,36 +22,45 @@ interface Ticket {
   contact: string | null
   assignee_id: string | null
   assignee_name: string | null
+  asset_id: number | null
+  asset_code: string | null
+  asset_name: string | null
   resolution: string | null
   rating: number | null
   due_at: string
   overdue: boolean
+  sla_state: '正常' | '即将超时' | '已超时' | '不计时'
+  auto_close_at: string | null
   created_at: string
+  available_actions?: string[]
   events?: TicketEvent[]
 }
-interface Overview { can_manage: boolean; total: number; open_count: number; overdue_count: number; my_assigned_open: number; average_rating: number | null; status_counts: Record<string, number> }
+interface LinkableAsset { id: number; asset_code: string; name: string; owner: string; location: string }
+interface Overview { can_handle: boolean; can_manage: boolean; total: number; open_count: number; overdue_count: number; warning_count: number; my_assigned_open: number; average_rating: number | null; status_counts: Record<string, number> }
 
 const auth = useAuthStore()
-const canManage = computed(() => auth.can('service_desk:manage'))
+const canHandle = computed(() => auth.can('service_desk:handle'))
 const categories = ['账号权限', '硬件设备', '软件安装', '网络连接', '其他']
 const priorities = ['低', '中', '高', '紧急']
-const statusFilters = ['全部', '待受理', '处理中', '已解决', '已关闭', '已取消', '超时']
-const statusColor: Record<string, string> = { 待受理: 'orange', 处理中: 'processing', 已解决: 'green', 已关闭: 'default', 已取消: 'default' }
+const statusFilters = ['全部', '待受理', '处理中', '待补充', '已解决', '已关闭', '已取消', '超时']
+const statusColor: Record<string, string> = { 待受理: 'orange', 处理中: 'processing', 待补充: 'purple', 已解决: 'green', 已关闭: 'default', 已取消: 'default' }
+const slaColor: Record<string, string> = { 即将超时: 'orange', 已超时: 'red' }
 const priorityColor: Record<string, string> = { 低: 'default', 中: 'blue', 高: 'orange', 紧急: 'red' }
-const flow = ['提交工单', '受理派单', '处理解决', '确认关闭']
+const flow = ['提交工单', '接单派单', '处理与补充信息', '解决确认', '关闭评价']
 
 const overview = ref<Overview | null>(null)
 const tickets = ref<Ticket[]>([])
 const agents = ref<{ id: string; display_name: string }[]>([])
 const loading = ref(true)
 const loadError = ref('')
-const scope = ref<'mine' | 'all' | 'assigned'>(canManage.value ? 'all' : 'mine')
+const scope = ref<'mine' | 'all' | 'assigned' | 'pool'>(canHandle.value ? 'pool' : 'mine')
 const statusFilter = ref('全部')
 const keyword = ref('')
 
 const createOpen = ref(false)
 const saving = ref(false)
-const form = reactive({ title: '', description: '', category: '账号权限', priority: '中', contact: '' })
+const form = reactive<{ title: string; description: string; category: string; priority: string; contact: string; asset_id: number | undefined }>({ title: '', description: '', category: '账号权限', priority: '中', contact: '', asset_id: undefined })
+const assetOptions = ref<LinkableAsset[]>([])
 
 const detail = ref<Ticket | null>(null)
 const detailOpen = ref(false)
@@ -59,12 +68,12 @@ const acting = ref(false)
 const comment = ref('')
 const resolution = ref('')
 const reason = ref('')
+const infoText = ref('')
 const rating = ref(5)
 const assigneeId = ref<string | undefined>()
 
-const isRequester = computed(() => detail.value?.requester_id === auth.user?.id)
-const isOpen = computed(() => ['待受理', '处理中'].includes(detail.value?.status || ''))
-const canComment = computed(() => ['待受理', '处理中', '已解决'].includes(detail.value?.status || ''))
+const can = (action: string) => Boolean(detail.value?.available_actions?.includes(action))
+const transferTargets = computed(() => agents.value.filter((agent) => agent.id !== detail.value?.assignee_id))
 
 function errorText(error: unknown, fallback: string) {
   if (axios.isAxiosError(error)) {
@@ -94,7 +103,7 @@ async function load() {
   try {
     overview.value = (await api.get('/api/v1/service-desk/overview')).data.data
     await loadTickets()
-    if (canManage.value && !agents.value.length) agents.value = (await api.get('/api/v1/service-desk/agents')).data.data
+    if (canHandle.value && !agents.value.length) agents.value = (await api.get('/api/v1/service-desk/agents')).data.data
   } catch (error) {
     loadError.value = errorText(error, '服务台数据加载失败')
   } finally {
@@ -112,19 +121,28 @@ async function refreshList() {
 
 watch([scope, statusFilter], refreshList)
 
+async function searchAssets(value = '') {
+  try {
+    assetOptions.value = (await api.get('/api/v1/service-desk/assets', { params: { keyword: value } })).data.data
+  } catch {
+    assetOptions.value = []
+  }
+}
+
 function openCreate() {
-  Object.assign(form, { title: '', description: '', category: '账号权限', priority: '中', contact: '' })
+  Object.assign(form, { title: '', description: '', category: '账号权限', priority: '中', contact: '', asset_id: undefined })
   createOpen.value = true
+  searchAssets()
 }
 
 async function submitTicket() {
   if (form.title.trim().length < 2 || form.description.trim().length < 5) return message.warning('请填写标题和至少 5 个字的问题描述')
   saving.value = true
   try {
-    const created = (await api.post('/api/v1/service-desk/tickets', { ...form, contact: form.contact.trim() || null })).data.data
+    const created = (await api.post('/api/v1/service-desk/tickets', { ...form, contact: form.contact.trim() || null, asset_id: form.asset_id ?? null })).data.data
     message.success(`工单 ${created.ticket_no} 已提交`)
     createOpen.value = false
-    if (!canManage.value) scope.value = 'mine'
+    if (!canHandle.value) scope.value = 'mine'
     await load()
   } catch (error) {
     message.error(errorText(error, '工单提交失败'))
@@ -139,8 +157,9 @@ async function openDetail(row: Ticket) {
     comment.value = ''
     resolution.value = ''
     reason.value = ''
+    infoText.value = ''
     rating.value = 5
-    assigneeId.value = detail.value?.assignee_id || auth.user?.id
+    assigneeId.value = undefined
     detailOpen.value = true
   } catch (error) {
     message.error(errorText(error, '工单详情加载失败'))
@@ -170,7 +189,11 @@ function requireText(value: string, hint: string) {
   return true
 }
 
-const assignTicket = () => act('assign', { assignee_id: assigneeId.value }, '工单已派发')
+const claimTicket = () => act('assign', {}, '已接单，开始处理')
+const assignTicket = () => (assigneeId.value ? act('assign', { assignee_id: assigneeId.value }, '工单已派发') : message.warning('请选择处理人'))
+const transferTicket = () => (assigneeId.value ? act('assign', { assignee_id: assigneeId.value, reason: reason.value.trim() || null }, '工单已转派') : message.warning('请选择转派对象'))
+const requestInfo = () => requireText(infoText.value, '请写明需要对方补充什么') && act('request-info', { content: infoText.value }, '已请提单人补充信息')
+const replyInfo = () => requireText(infoText.value, '请填写补充的信息') && act('reply', { content: infoText.value }, '补充信息已提交，工单继续处理')
 const resolveTicket = () => requireText(resolution.value, '请填写处理结果') && act('resolve', { resolution: resolution.value }, '已标记为已解决')
 const closeTicket = () => act('close', { rating: rating.value }, '工单已关闭，感谢评价')
 const reopenTicket = () => requireText(reason.value, '请说明未解决的原因') && act('reopen', { reason: reason.value }, '工单已重新打开')
@@ -186,7 +209,7 @@ onMounted(load)
       <div>
         <p class="eyebrow">SERVICE DESK</p>
         <h1>企业IT服务台</h1>
-        <p>员工提交 IT 问题，服务台受理派单、处理解决，提单人确认关闭并评价。每一步都会留痕并通知相关人。</p>
+        <p>员工提交 IT 问题，IT 运维接单或由主管派单，处理中可请提单人补充信息或转派，解决后由提单人确认评价，72 小时未反馈自动关闭。每一步都会留痕并通知相关人。</p>
       </div>
       <div class="heading-actions">
         <a-button type="primary" @click="openCreate"><PlusOutlined /> 提交工单</a-button>
@@ -199,10 +222,10 @@ onMounted(load)
     </a-result>
     <template v-else-if="overview">
       <section class="metric-grid">
-        <a-card class="metric-card" :bordered="false"><CustomerServiceOutlined /><span>{{ overview.can_manage ? '全部工单' : '我的工单' }}</span><strong>{{ overview.total }}</strong></a-card>
-        <a-card class="metric-card" :bordered="false"><ClockCircleOutlined /><span>处理中 / 待受理</span><strong>{{ overview.open_count }}</strong></a-card>
-        <a-card class="metric-card" :bordered="false"><AlertOutlined /><span>超时未解决</span><strong>{{ overview.overdue_count }}</strong></a-card>
-        <a-card class="metric-card" :bordered="false"><CheckCircleOutlined /><span>{{ overview.can_manage ? '我负责的未完成' : '平均满意度' }}</span><strong>{{ overview.can_manage ? overview.my_assigned_open : overview.average_rating ?? '-' }}</strong></a-card>
+        <a-card class="metric-card" :bordered="false"><CustomerServiceOutlined /><span>{{ overview.can_handle ? '全部工单' : '我的工单' }}</span><strong>{{ overview.total }}</strong></a-card>
+        <a-card class="metric-card" :bordered="false"><ClockCircleOutlined /><span>未完成（含待补充）</span><strong>{{ overview.open_count }}</strong></a-card>
+        <a-card class="metric-card" :bordered="false"><AlertOutlined /><span>已超时 / 即将超时</span><strong>{{ overview.overdue_count }} / {{ overview.warning_count }}</strong></a-card>
+        <a-card class="metric-card" :bordered="false"><CheckCircleOutlined /><span>{{ overview.can_handle ? '我负责的未完成' : '平均满意度' }}</span><strong>{{ overview.can_handle ? overview.my_assigned_open : overview.average_rating ?? '-' }}</strong></a-card>
       </section>
 
       <a-card class="plain-panel service-flow" :bordered="false">
@@ -216,9 +239,10 @@ onMounted(load)
 
       <a-card class="plain-panel service-ticket-panel" :bordered="false">
         <div class="section-title service-ticket-toolbar">
-          <a-radio-group v-if="canManage" v-model:value="scope" button-style="solid" size="small">
-            <a-radio-button value="all">全部工单</a-radio-button>
+          <a-radio-group v-if="canHandle" v-model:value="scope" button-style="solid" size="small">
+            <a-radio-button value="pool">工单池</a-radio-button>
             <a-radio-button value="assigned">我负责的</a-radio-button>
+            <a-radio-button value="all">全部工单</a-radio-button>
             <a-radio-button value="mine">我提交的</a-radio-button>
           </a-radio-group>
           <h2 v-else>我的工单</h2>
@@ -254,7 +278,7 @@ onMounted(load)
             <template v-if="column.dataIndex === 'priority'"><a-tag :color="priorityColor[record.priority]">{{ record.priority }}</a-tag></template>
             <template v-if="column.dataIndex === 'status'">
               <a-tag :color="statusColor[record.status]">{{ record.status }}</a-tag>
-              <a-tag v-if="record.overdue" color="red">超时</a-tag>
+              <a-tag v-if="slaColor[record.sla_state]" :color="slaColor[record.sla_state]">{{ record.sla_state }}</a-tag>
             </template>
             <template v-if="column.dataIndex === 'requester_name'">
               <span>{{ record.requester_name }}</span>
@@ -278,6 +302,17 @@ onMounted(load)
           <a-col :span="12"><a-form-item label="紧急程度" required><a-select v-model:value="form.priority" :options="priorities.map((value) => ({ label: value, value }))" /></a-form-item></a-col>
         </a-row>
         <a-form-item label="问题描述" required><a-textarea v-model:value="form.description" :rows="5" :maxlength="4000" show-count placeholder="发生了什么、什么时候开始、已经尝试过什么" /></a-form-item>
+        <a-form-item label="关联设备（选填）">
+          <a-select
+            v-model:value="form.asset_id"
+            allow-clear
+            show-search
+            :filter-option="false"
+            placeholder="输入资产编号或名称搜索"
+            :options="assetOptions.map((item) => ({ label: `${item.asset_code} · ${item.name}（${item.owner}）`, value: item.id }))"
+            @search="searchAssets"
+          />
+        </a-form-item>
         <a-form-item label="联系方式"><a-input v-model:value="form.contact" :maxlength="120" placeholder="分机或手机号（选填）" /></a-form-item>
       </a-form>
     </a-modal>
@@ -289,32 +324,56 @@ onMounted(load)
           <a-tag :color="statusColor[detail.status]">{{ detail.status }}</a-tag>
           <a-tag :color="priorityColor[detail.priority]">{{ detail.priority }}优先级</a-tag>
           <a-tag>{{ detail.category }}</a-tag>
-          <a-tag v-if="detail.overdue" color="red">已超时</a-tag>
+          <a-tag v-if="slaColor[detail.sla_state]" :color="slaColor[detail.sla_state]">{{ detail.sla_state }}</a-tag>
         </a-space>
         <a-descriptions :column="2" size="small" bordered>
           <a-descriptions-item label="提单人">{{ detail.requester_name }}</a-descriptions-item>
           <a-descriptions-item label="部门">{{ detail.department || '-' }}</a-descriptions-item>
           <a-descriptions-item label="处理人">{{ detail.assignee_name || '未派单' }}</a-descriptions-item>
           <a-descriptions-item label="解决时限">{{ formatTime(detail.due_at) }}</a-descriptions-item>
+          <a-descriptions-item v-if="detail.asset_code" label="关联设备" :span="2">{{ detail.asset_code }} · {{ detail.asset_name }}</a-descriptions-item>
+          <a-descriptions-item v-if="detail.auto_close_at" label="自动关闭" :span="2">{{ formatTime(detail.auto_close_at) }} 前未确认将自动关闭</a-descriptions-item>
           <a-descriptions-item v-if="detail.contact" label="联系方式" :span="2">{{ detail.contact }}</a-descriptions-item>
           <a-descriptions-item label="问题描述" :span="2"><span class="pre-wrap">{{ detail.description }}</span></a-descriptions-item>
           <a-descriptions-item v-if="detail.resolution" label="处理结果" :span="2"><span class="pre-wrap">{{ detail.resolution }}</span></a-descriptions-item>
           <a-descriptions-item v-if="detail.rating" label="满意度" :span="2"><a-rate :value="detail.rating" disabled /></a-descriptions-item>
         </a-descriptions>
 
-        <section v-if="canManage && isOpen" class="service-action-block">
-          <h3>派单与处理</h3>
+        <section v-if="can('claim') || can('assign')" class="service-action-block">
+          <h3>接单与派单</h3>
           <a-space wrap>
-            <a-select v-model:value="assigneeId" :options="agents.map((agent) => ({ label: agent.display_name, value: agent.id }))" style="width:160px" />
-            <a-button :loading="acting" @click="assignTicket">{{ detail.status === '待受理' ? '受理并派单' : '转派' }}</a-button>
+            <a-button v-if="can('claim')" type="primary" :loading="acting" @click="claimTicket">我来接单</a-button>
+            <template v-if="can('assign')">
+              <a-select v-model:value="assigneeId" placeholder="选择处理人" :options="agents.map((agent) => ({ label: agent.display_name, value: agent.id }))" style="width:160px" />
+              <a-button :loading="acting" @click="assignTicket">派单</a-button>
+            </template>
           </a-space>
-          <template v-if="detail.status === '处理中'">
-            <a-textarea v-model:value="resolution" :rows="3" placeholder="处理结果，提单人会收到通知并确认" class="service-action-input" />
-            <a-button type="primary" :loading="acting" @click="resolveTicket">标记已解决</a-button>
-          </template>
         </section>
 
-        <section v-if="isRequester && detail.status === '已解决'" class="service-action-block">
+        <section v-if="can('resolve')" class="service-action-block">
+          <h3>处理工单</h3>
+          <a-textarea v-model:value="resolution" :rows="3" placeholder="处理结果，提单人会收到通知并确认" class="service-action-input" />
+          <a-button type="primary" :loading="acting" @click="resolveTicket">标记已解决</a-button>
+          <a-textarea v-model:value="infoText" :rows="2" placeholder="需要提单人补充什么？例如：报错截图、设备编号" class="service-action-input" />
+          <a-button :loading="acting" @click="requestInfo">请提单人补充信息</a-button>
+        </section>
+
+        <section v-if="can('transfer')" class="service-action-block">
+          <h3>转派</h3>
+          <a-space wrap>
+            <a-select v-model:value="assigneeId" placeholder="转给谁" :options="transferTargets.map((agent) => ({ label: agent.display_name, value: agent.id }))" style="width:160px" />
+            <a-input v-model:value="reason" :maxlength="500" placeholder="转派原因（选填）" style="width:220px" />
+            <a-button :loading="acting" @click="transferTicket">转派</a-button>
+          </a-space>
+        </section>
+
+        <section v-if="can('reply')" class="service-action-block">
+          <h3>处理人需要你补充信息</h3>
+          <a-textarea v-model:value="infoText" :rows="3" placeholder="按处理人的要求补充说明" class="service-action-input" />
+          <a-button type="primary" :loading="acting" @click="replyInfo">提交补充信息</a-button>
+        </section>
+
+        <section v-if="can('close')" class="service-action-block">
           <h3>确认处理结果</h3>
           <div class="service-rating"><span>满意度</span><a-rate v-model:value="rating" /></div>
           <a-space wrap>
@@ -324,7 +383,7 @@ onMounted(load)
           <a-button :loading="acting" @click="reopenTicket">问题未解决，重新打开</a-button>
         </section>
 
-        <section v-if="isRequester && isOpen" class="service-action-block">
+        <section v-if="can('cancel')" class="service-action-block">
           <h3>撤回工单</h3>
           <a-textarea v-model:value="reason" :rows="2" placeholder="撤回原因，例如问题已自行解决" class="service-action-input" />
           <a-button danger :loading="acting" @click="cancelTicket">撤回工单</a-button>
@@ -338,7 +397,7 @@ onMounted(load)
               <p class="pre-wrap">{{ item.content }}</p>
             </a-timeline-item>
           </a-timeline>
-          <template v-if="canComment">
+          <template v-if="can('comment')">
             <a-textarea v-model:value="comment" :rows="2" :maxlength="2000" placeholder="补充信息或回复对方" class="service-action-input" />
             <a-button :loading="acting" :disabled="!comment.trim()" @click="sendComment">发送回复</a-button>
           </template>

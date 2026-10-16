@@ -36,18 +36,19 @@ def test_admin_can_view_all_modules(client, admin_headers):
     assert len(response.json()["data"]) == 4
 
 
-def test_demo_accounts_expose_twenty_role_based_trial_accounts(client):
+def test_demo_accounts_expose_role_based_trial_accounts(client):
     response = client.get("/api/v1/auth/demo-accounts")
     assert response.status_code == 200
     payload = response.json()["data"]
     assert payload["password"] == "Demo@2026!"
-    assert len(payload["accounts"]) == 20
+    assert len(payload["accounts"]) == 22
     assert {account["role"] for account in payload["accounts"]} == {
         "platform_admin",
         "recruitment_admin",
         "asset_admin",
         "department_manager",
         "approval_finance",
+        "it_support",
         "employee",
     }
     assert all("password_hash" not in account for account in payload["accounts"])

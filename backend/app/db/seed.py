@@ -32,6 +32,7 @@ ROLE_PERMISSIONS = {
         "inventory:manage",
         "inventory:self_check",
         "service_desk:view",
+        "service_desk:handle",
         "service_desk:manage",
         "notification:view",
         "audit:view",
@@ -55,6 +56,13 @@ ROLE_PERMISSIONS = {
         "inventory:self_check",
         "notification:view",
         "ai_run:view",
+    ],
+    "it_support": [
+        "dashboard:view",
+        "asset:view",
+        "service_desk:view",
+        "service_desk:handle",
+        "notification:view",
     ],
     "department_manager": [
         "dashboard:view",
@@ -140,6 +148,20 @@ DEMO_USERS = [
         "display_name": "IT资产专员",
         "department": "信息技术部",
         "role": "asset_admin",
+    },
+    {
+        "id": "77111111-1111-1111-1111-111111111111",
+        "email": "it01@demo.local",
+        "display_name": "IT运维工程师",
+        "department": "信息技术部",
+        "role": "it_support",
+    },
+    {
+        "id": "77222222-2222-2222-2222-222222222222",
+        "email": "it02@demo.local",
+        "display_name": "IT桌面支持",
+        "department": "信息技术部",
+        "role": "it_support",
     },
     {
         "id": "22222222-2222-2222-2222-222222222222",
@@ -276,15 +298,27 @@ def ensure_recruitment_schema() -> None:
             connection.execute(text("ALTER TABLE candidate_applications ADD COLUMN ai_evidence JSON"))
 
 
+def ensure_service_desk_schema() -> None:
+    inspector = inspect(engine)
+    if "service_tickets" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("service_tickets")}
+    with engine.begin() as connection:
+        if "asset_id" not in columns:
+            connection.execute(text("ALTER TABLE service_tickets ADD COLUMN asset_id INTEGER REFERENCES assets(id)"))
+
+
 def seed_service_tickets(db) -> None:
     now = datetime.now(UTC)
-    admin = DEMO_USERS[0]
+    engineer = next(item for item in DEMO_USERS if item["email"] == "it01@demo.local")
+    laptop = db.scalar(select(Asset).where(Asset.asset_code == "BYD-LAP-2026-001"))
     samples = [
-        (DEMO_USERS[-5], "VPN 连接后无法访问内网 Git", "居家办公连上 VPN 后，git.internal 一直超时，浏览器能打开公司门户。", "网络连接", "高", "待受理", None, None),
-        (DEMO_USERS[-4], "申请 Tableau 只读账号", "需要查看数据平台组的周报看板，请开通 Tableau 只读权限。", "账号权限", "中", "处理中", admin, None),
-        (DEMO_USERS[-3], "工位显示器闪屏", "左侧显示器每隔几分钟黑屏一次，已更换过线缆。", "硬件设备", "低", "已解决", admin, "已更换为备用显示器，原设备送修。"),
+        (DEMO_USERS[-5], "VPN 连接后无法访问内网 Git", "居家办公连上 VPN 后，git.internal 一直超时，浏览器能打开公司门户。", "网络连接", "高", "待受理", None, None, None, None),
+        (DEMO_USERS[-4], "申请 Tableau 只读账号", "需要查看数据平台组的周报看板，请开通 Tableau 只读权限。", "账号权限", "中", "处理中", engineer, None, None, None),
+        (DEMO_USERS[-3], "工位显示器闪屏", "左侧显示器每隔几分钟黑屏一次，已更换过线缆。", "硬件设备", "低", "已解决", engineer, "已更换为备用显示器，原设备送修。", None, None),
+        (DEMO_USERS[-2], "研发笔记本频繁蓝屏", "这周已经蓝屏三次，错误代码不记得了，多发生在开会投屏时。", "硬件设备", "高", "待补充", engineer, None, laptop, "请在蓝屏后拍一下错误代码，或者告诉我投屏用的是哪个转接头。"),
     ]
-    for index, (requester, title, description, category, priority, status, assignee, resolution) in enumerate(samples, start=1):
+    for index, (requester, title, description, category, priority, status, assignee, resolution, asset, question) in enumerate(samples, start=1):
         created_at = now - timedelta(hours=6 * index)
         ticket = ServiceTicket(
             ticket_no=f"IT-SEED-{index:04d}",
@@ -298,6 +332,7 @@ def seed_service_tickets(db) -> None:
             department=requester["department"],
             assignee_id=assignee["id"] if assignee else None,
             assignee_name=assignee["display_name"] if assignee else None,
+            asset_id=asset.id if asset else None,
             resolution=resolution,
             due_at=created_at + timedelta(hours={"紧急": 4, "高": 8, "中": 24, "低": 72}[priority]),
             resolved_at=now - timedelta(hours=1) if status == "已解决" else None,
@@ -308,6 +343,8 @@ def seed_service_tickets(db) -> None:
         db.add(ServiceTicketEvent(ticket_id=ticket.id, kind="status", actor_id=requester["id"], actor_name=requester["display_name"], content=f"提交工单（{category} / {priority}优先级）", created_at=created_at))
         if assignee:
             db.add(ServiceTicketEvent(ticket_id=ticket.id, kind="status", actor_id=assignee["id"], actor_name=assignee["display_name"], content=f"{assignee['display_name']} 已受理", created_at=created_at + timedelta(minutes=30)))
+        if question:
+            db.add(ServiceTicketEvent(ticket_id=ticket.id, kind="status", actor_id=assignee["id"], actor_name=assignee["display_name"], content=f"请求补充信息：{question}", created_at=created_at + timedelta(hours=1)))
         if resolution:
             db.add(ServiceTicketEvent(ticket_id=ticket.id, kind="status", actor_id=assignee["id"], actor_name=assignee["display_name"], content=f"标记已解决：{resolution}", created_at=now - timedelta(hours=1)))
 
@@ -321,6 +358,7 @@ def initialize_database() -> None:
     ensure_user_schema()
     ensure_asset_schema()
     ensure_recruitment_schema()
+    ensure_service_desk_schema()
     with SessionLocal() as db:
         db.execute(delete(User).where(User.role == "auditor"))
         db.commit()

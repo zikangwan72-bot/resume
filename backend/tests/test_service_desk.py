@@ -104,3 +104,128 @@ def test_validation_rejects_unknown_category(client):
     employee = login(client, "employee01@demo.local")
     response = client.post("/api/v1/service-desk/tickets", json={"title": "测试", "description": "描述内容足够长", "category": "咖啡机"}, headers=employee)
     assert response.status_code == 422
+
+
+def ticket_url(ticket):
+    return f"/api/v1/service-desk/tickets/{ticket['id']}"
+
+
+def test_it_support_claims_requests_info_and_transfers(client, admin_headers):
+    employee = login(client, "employee03@demo.local")
+    it01 = login(client, "it01@demo.local")
+    it02 = login(client, "it02@demo.local")
+    ticket = create_ticket(client, employee, title="Outlook 收不到外部邮件")
+    url = ticket_url(ticket)
+
+    pool = client.get("/api/v1/service-desk/tickets?scope=pool", headers=it01).json()["data"]
+    assert any(row["id"] == ticket["id"] for row in pool)
+    assert any(item["title"] == "新的IT服务工单" for item in client.get("/api/v1/notifications", headers=it02).json()["data"])
+
+    claimed = client.post(f"{url}/assign", json={}, headers=it01).json()["data"]
+    assert claimed["status"] == "处理中"
+    assert claimed["assignee_name"] == "IT运维工程师"
+    assert claimed["available_actions"] == ["transfer", "request_info", "resolve", "comment"]
+
+    # 不是当前处理人，也不是主管：不能抢单、不能解决
+    assert client.post(f"{url}/assign", json={}, headers=it02).status_code == 403
+    assert client.post(f"{url}/resolve", json={"resolution": "抢着解决"}, headers=it02).status_code == 403
+
+    asked = client.post(f"{url}/request-info", json={"content": "请截图报错提示"}, headers=it01).json()["data"]
+    assert asked["status"] == "待补充"
+    assert asked["sla_state"] == "不计时"
+    assert client.post(f"{url}/resolve", json={"resolution": "先关掉"}, headers=it01).status_code == 409
+    assert client.post(f"{url}/reply", json={"content": "截图如下"}, headers=it02).status_code == 403
+    employee_view = client.get(url, headers=employee).json()["data"]
+    assert "reply" in employee_view["available_actions"]
+
+    replied = client.post(f"{url}/reply", json={"content": "提示 550 拒收"}, headers=employee).json()["data"]
+    assert replied["status"] == "处理中"
+
+    it02_id = client.get("/api/v1/auth/me", headers=it02).json()["data"]["id"]
+    transferred = client.post(f"{url}/assign", json={"assignee_id": it02_id, "reason": "邮件网关归桌面支持"}, headers=it01).json()["data"]
+    assert transferred["assignee_name"] == "IT桌面支持"
+    assert client.post(f"{url}/resolve", json={"resolution": "旧处理人"}, headers=it01).status_code == 403
+    assert client.post(f"{url}/resolve", json={"resolution": "放行外部域名"}, headers=it02).json()["data"]["status"] == "已解决"
+
+    events = [event["content"] for event in client.get(url, headers=employee).json()["data"]["events"]]
+    assert "请求补充信息：请截图报错提示" in events
+    assert "补充信息：提示 550 拒收" in events
+    assert any(item.startswith("由 IT运维工程师 转派给 IT桌面支持") for item in events)
+    audit = client.get("/api/v1/audit-logs", headers=admin_headers).json()["data"]
+    assert any(item["action"] == "service_ticket_transferred" for item in audit)
+
+
+def test_only_manager_can_assign_to_others(client, admin_headers):
+    employee = login(client, "employee04@demo.local")
+    it01 = login(client, "it01@demo.local")
+    it02_id = client.get("/api/v1/auth/me", headers=login(client, "it02@demo.local")).json()["data"]["id"]
+    ticket = create_ticket(client, employee, title="新员工开通 VPN")
+    url = ticket_url(ticket)
+
+    assert client.post(f"{url}/assign", json={"assignee_id": it02_id}, headers=it01).status_code == 403
+    assigned = client.post(f"{url}/assign", json={"assignee_id": it02_id}, headers=admin_headers).json()["data"]
+    assert assigned["assignee_name"] == "IT桌面支持"
+    assert client.post(f"{url}/assign", json={"assignee_id": it02_id}, headers=admin_headers).status_code == 409
+
+    # IT 人员能看全部工单，普通员工不能
+    assert client.get("/api/v1/service-desk/tickets?scope=all", headers=it01).status_code == 200
+    assert client.get(url, headers=it01).status_code == 200
+    assert client.get("/api/v1/service-desk/agents", headers=it01).status_code == 200
+    assert client.get("/api/v1/service-desk/agents", headers=employee).status_code == 403
+    overview = client.get("/api/v1/service-desk/overview", headers=it01).json()["data"]
+    assert overview["can_handle"] is True and overview["can_manage"] is False
+
+
+def test_resolved_ticket_auto_closes_after_72_hours(client, admin_headers):
+    from datetime import UTC, datetime, timedelta
+
+    from app.business.models import ServiceTicket
+    from app.db.database import SessionLocal
+
+    employee = login(client, "employee05@demo.local")
+    ticket = create_ticket(client, employee, title="打印机卡纸")
+    url = ticket_url(ticket)
+    client.post(f"{url}/assign", json={}, headers=admin_headers)
+    resolved = client.post(f"{url}/resolve", json={"resolution": "已清理卡纸"}, headers=admin_headers).json()["data"]
+    assert resolved["auto_close_at"] is not None
+    assert client.get(url, headers=employee).json()["data"]["status"] == "已解决"
+
+    with SessionLocal() as db:
+        row = db.get(ServiceTicket, ticket["id"])
+        row.resolved_at = datetime.now(UTC) - timedelta(hours=73)
+        db.commit()
+
+    detail = client.get(url, headers=employee).json()["data"]
+    assert detail["status"] == "已关闭"
+    assert detail["events"][-1]["actor_name"] == "System"
+    assert any(item["title"] == "工单已自动关闭" for item in client.get("/api/v1/notifications", headers=employee).json()["data"])
+
+
+def test_sla_state_and_asset_link(client):
+    from datetime import UTC, datetime, timedelta
+
+    from app.business.models import ServiceTicket
+    from app.db.database import SessionLocal
+
+    employee = login(client, "employee01@demo.local")
+    assets = client.get("/api/v1/service-desk/assets?keyword=笔记本", headers=employee).json()["data"]
+    assert assets
+    ticket = create_ticket(client, employee, title="笔记本键盘失灵", priority="紧急", asset_id=assets[0]["id"])
+    assert ticket["asset_code"] == assets[0]["asset_code"]
+    assert ticket["sla_state"] == "正常"
+
+    bad = client.post("/api/v1/service-desk/tickets", json={"title": "无效资产", "description": "资产编号不存在", "category": "硬件设备", "asset_id": 999999}, headers=employee)
+    assert bad.status_code == 400
+
+    with SessionLocal() as db:
+        row = db.get(ServiceTicket, ticket["id"])
+        row.created_at = datetime.now(UTC) - timedelta(hours=3, minutes=30)
+        row.due_at = datetime.now(UTC) + timedelta(minutes=30)
+        db.commit()
+    assert client.get(ticket_url(ticket), headers=employee).json()["data"]["sla_state"] == "即将超时"
+
+    with SessionLocal() as db:
+        row = db.get(ServiceTicket, ticket["id"])
+        row.due_at = datetime.now(UTC) - timedelta(minutes=1)
+        db.commit()
+    assert client.get(ticket_url(ticket), headers=employee).json()["data"]["sla_state"] == "已超时"

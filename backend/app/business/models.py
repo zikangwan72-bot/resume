@@ -187,6 +187,7 @@ class ServiceTicket(Base):
     contact: Mapped[str | None] = mapped_column(String(120), nullable=True)
     assignee_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     assignee_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id"), nullable=True, index=True)
     resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
     rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

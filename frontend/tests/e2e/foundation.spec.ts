@@ -156,13 +156,14 @@ test('employee role is blocked from audit API and menu', async ({ page }) => {
   expect(response.status()).toBe(403)
 })
 
-test('login page offers twenty fixed role-based trial accounts', async ({ page }) => {
+test('login page offers fixed role-based trial accounts', async ({ page }) => {
   await page.goto('/login')
-  await expect(page.locator('.role-option')).toHaveCount(20)
+  await expect(page.locator('.role-option')).toHaveCount(22)
   await expect(page.getByRole('button', { name: /admin@demo.local/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /招聘负责人/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /资产管理员A/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /员工一/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /IT运维工程师/ })).toBeVisible()
   await expect(page.getByText('审计查看者')).toHaveCount(0)
 })
 

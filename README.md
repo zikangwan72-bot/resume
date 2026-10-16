@@ -14,7 +14,7 @@
 - Vue 3、TypeScript、Vite和Ant Design Vue企业后台
 - FastAPI、Swagger和统一请求ID
 - SQLite本地数据库与Supabase PostgreSQL云端数据库
-- 20个固定试用账号、Bearer token和前后端权限检查
+- 22个固定试用账号、Bearer token和前后端权限检查
 - 工作台、四模块入口、通知、审计、AI记录和个人资料
 - Supabase Database/Auth/Storage状态探针，避免伪造外部服务连接
 - 后端测试、前端类型检查和生产构建
@@ -61,7 +61,7 @@ npm run dev
 
 ## 固定试用账号
 
-登录页面提供20个固定试用账号，覆盖平台管理员、招聘管理员、资产管理员、部门经理、财务审批和普通员工。统一试用密码为 `Demo@2026!`。
+登录页面提供22个固定试用账号，覆盖平台管理员、招聘管理员、资产管理员、IT运维、部门经理、财务审批和普通员工。统一试用密码为 `Demo@2026!`。
 
 ## Supabase
 

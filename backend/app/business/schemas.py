@@ -125,10 +125,12 @@ class TicketCreate(BaseModel):
     category: TicketCategory
     priority: TicketPriority = "中"
     contact: str | None = Field(default=None, max_length=120)
+    asset_id: int | None = None
 
 
 class TicketAssign(BaseModel):
     assignee_id: str | None = None
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class TicketResolve(BaseModel):

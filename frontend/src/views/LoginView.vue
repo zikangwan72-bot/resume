@@ -21,6 +21,7 @@ const roleLabel: Record<string, string> = {
   asset_admin: '资产管理员',
   department_manager: '部门经理',
   approval_finance: '财务审批',
+  it_support: 'IT运维',
   employee: '员工',
 }
 
@@ -33,6 +34,8 @@ const fallbackAccounts: DemoAccount[] = [
   { email: 'asset01@demo.local', display_name: '资产管理员A', department: '行政资产组', role: 'asset_admin' },
   { email: 'asset02@demo.local', display_name: '区域资产专员', department: '深圳行政资产组', role: 'asset_admin' },
   { email: 'asset03@demo.local', display_name: 'IT资产专员', department: '信息技术部', role: 'asset_admin' },
+  { email: 'it01@demo.local', display_name: 'IT运维工程师', department: '信息技术部', role: 'it_support' },
+  { email: 'it02@demo.local', display_name: 'IT桌面支持', department: '信息技术部', role: 'it_support' },
   { email: 'manager01@demo.local', display_name: '产品研发经理', department: '产品与流程创新', role: 'department_manager' },
   { email: 'manager02@demo.local', display_name: '数据平台经理', department: '数据平台组', role: 'department_manager' },
   { email: 'manager03@demo.local', display_name: '质量检测经理', department: '质量检测部', role: 'department_manager' },
