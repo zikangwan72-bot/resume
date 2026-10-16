@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.business.models import CandidateApplication, JobOpening
 from app.business.schemas import ApplicationCreate, ApplicationStatusUpdate, JobCreate, JobUpdate
 from app.core.config import settings
+from app.core.pagination import PageParams, page_params, page_response, paginate_select
 from app.core.security import require_permission
 from app.db.database import get_db
 from app.db.models import User
@@ -182,11 +183,12 @@ def create_application(payload: ApplicationCreate, _: User = Depends(require_per
 
 
 @router.get("/applications")
-def list_applications(job_id: int | None = None, status_filter: str = Query("", alias="status"), _: User = Depends(require_permission("recruitment:manage")), db: Session = Depends(get_db)) -> dict:
-    query = select(CandidateApplication).order_by(CandidateApplication.created_at.desc())
+def list_applications(job_id: int | None = None, status_filter: str = Query("", alias="status"), paging: PageParams | None = Depends(page_params), _: User = Depends(require_permission("recruitment:manage")), db: Session = Depends(get_db)) -> dict:
+    query = select(CandidateApplication).order_by(CandidateApplication.created_at.desc(), CandidateApplication.id.desc())
     if job_id is not None: query = query.where(CandidateApplication.job_id == job_id)
     if status_filter: query = query.where(CandidateApplication.status == status_filter)
-    return {"data": [application_payload(row, db) for row in db.scalars(query).all()]}
+    rows, meta = paginate_select(db, query, paging)
+    return page_response([application_payload(row, db) for row in rows], meta)
 
 
 @router.get("/applications/{application_id}")

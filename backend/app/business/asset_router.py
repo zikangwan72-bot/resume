@@ -35,6 +35,7 @@ from app.business.schemas import (
     MobileInventorySubmit,
     ResolveExceptionRequest,
 )
+from app.core.pagination import PageParams, page_params, page_response, paginate_select
 from app.core.security import require_permission
 from app.db.database import get_db
 from app.db.models import User
@@ -96,7 +97,7 @@ def asset_overview(
 
 
 @router.get("")
-def list_assets(keyword: str = "", status_filter: str = Query("", alias="status"), category: str = "", department: str = "", _: User = Depends(require_permission("asset:view")), db: Session = Depends(get_db)) -> dict:
+def list_assets(keyword: str = "", status_filter: str = Query("", alias="status"), category: str = "", department: str = "", paging: PageParams | None = Depends(page_params), _: User = Depends(require_permission("asset:view")), db: Session = Depends(get_db)) -> dict:
     query = select(Asset).order_by(Asset.created_at.desc())
     if keyword:
         term = f"%{keyword}%"
@@ -104,7 +105,8 @@ def list_assets(keyword: str = "", status_filter: str = Query("", alias="status"
     if status_filter: query = query.where(Asset.status == status_filter)
     if category: query = query.where(Asset.category == category)
     if department: query = query.where(Asset.department == department)
-    return {"data": [asset_payload(row) for row in db.scalars(query).all()]}
+    rows, meta = paginate_select(db, query.order_by(Asset.id.desc()), paging)
+    return page_response([asset_payload(row) for row in rows], meta)
 
 
 @router.post("/import/preview")

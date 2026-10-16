@@ -13,6 +13,7 @@ from app.business.asset_router import router as asset_router
 from app.business.recruitment_router import router as recruitment_router
 from app.business.service_desk_router import router as service_desk_router
 from app.core.config import settings
+from app.core.pagination import PageParams, page_params, page_response, paginate_select
 from app.core.rate_limit import LoginRateLimiter
 from app.core.security import (
     create_access_token,
@@ -285,11 +286,15 @@ def mark_notification_read(
 
 @router.get("/audit-logs")
 def audit_logs(
-    _: User = Depends(require_permission("audit:view")), db: Session = Depends(get_db)
+    paging: PageParams | None = Depends(page_params),
+    _: User = Depends(require_permission("audit:view")),
+    db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    rows = db.scalars(select(AuditLog).order_by(desc(AuditLog.created_at)).limit(100)).all()
-    return {
-        "data": [
+    query = select(AuditLog).order_by(desc(AuditLog.created_at), desc(AuditLog.id))
+    # Unpaged callers keep the original "latest 100" view.
+    rows, meta = paginate_select(db, query if paging else query.limit(100), paging)
+    return page_response(
+        [
             {
                 "id": row.id,
                 "actor_name": row.actor_name,
@@ -300,8 +305,9 @@ def audit_logs(
                 "created_at": row.created_at,
             }
             for row in rows
-        ]
-    }
+        ],
+        meta,
+    )
 
 
 @router.get("/ai-runs")

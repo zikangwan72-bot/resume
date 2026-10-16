@@ -56,6 +56,7 @@ const loadError = ref('')
 const scope = ref<'mine' | 'all' | 'assigned' | 'pool'>(canHandle.value ? 'pool' : 'mine')
 const statusFilter = ref('全部')
 const keyword = ref('')
+const ticketPage = reactive({ current: 1, pageSize: 10, total: 0 })
 
 const createOpen = ref(false)
 const saving = ref(false)
@@ -91,10 +92,28 @@ function formatTime(value: string | null | undefined) {
 }
 
 async function loadTickets() {
-  const params: Record<string, string> = { scope: scope.value }
+  const params: Record<string, string | number> = { scope: scope.value, page: ticketPage.current, page_size: ticketPage.pageSize }
   if (statusFilter.value !== '全部') params.status = statusFilter.value
   if (keyword.value.trim()) params.keyword = keyword.value.trim()
-  tickets.value = (await api.get('/api/v1/service-desk/tickets', { params })).data.data
+  const body = (await api.get('/api/v1/service-desk/tickets', { params })).data
+  ticketPage.total = body.pagination?.total ?? body.data.length
+  // A page can empty out after a ticket changes status; step back to the last page.
+  if (!body.data.length && ticketPage.current > 1 && ticketPage.total > 0) {
+    ticketPage.current = Math.ceil(ticketPage.total / ticketPage.pageSize)
+    return loadTickets()
+  }
+  tickets.value = body.data
+}
+
+function changeTicketPage(pagination: { current?: number; pageSize?: number }) {
+  ticketPage.current = pagination.current ?? 1
+  ticketPage.pageSize = pagination.pageSize ?? ticketPage.pageSize
+  refreshList()
+}
+
+function searchTickets() {
+  ticketPage.current = 1
+  refreshList()
 }
 
 async function load() {
@@ -119,7 +138,7 @@ async function refreshList() {
   }
 }
 
-watch([scope, statusFilter], refreshList)
+watch([scope, statusFilter], searchTickets)
 
 async function searchAssets(value = '') {
   try {
@@ -247,7 +266,7 @@ onMounted(load)
           </a-radio-group>
           <h2 v-else>我的工单</h2>
           <a-space wrap>
-            <a-input-search v-model:value="keyword" allow-clear placeholder="搜索标题、单号、提单人" style="width:220px" @search="refreshList" />
+            <a-input-search v-model:value="keyword" allow-clear placeholder="搜索标题、单号、提单人" style="width:220px" @search="searchTickets" />
             <a-select v-model:value="statusFilter" :options="statusFilters.map((value) => ({ label: value, value }))" style="width:110px" />
           </a-space>
         </div>
@@ -257,9 +276,10 @@ onMounted(load)
           size="small"
           row-key="id"
           :loading="loading"
-          :pagination="{ pageSize: 10 }"
+          :pagination="{ current: ticketPage.current, pageSize: ticketPage.pageSize, total: ticketPage.total, showSizeChanger: false, showTotal: (total: number) => `共 ${total} 张` }"
           :scroll="{ x: 760 }"
           :data-source="tickets"
+          @change="changeTicketPage"
           :custom-row="(record: Ticket) => ({ onClick: () => openDetail(record), style: 'cursor:pointer' })"
           :columns="[
             { title: '工单', dataIndex: 'title', width: '36%' },

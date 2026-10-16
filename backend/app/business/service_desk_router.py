@@ -14,6 +14,13 @@ from app.business.schemas import (
     TicketReason,
     TicketResolve,
 )
+from app.core.pagination import (
+    PageParams,
+    page_params,
+    page_response,
+    paginate_list,
+    paginate_select,
+)
 from app.core.security import require_permission
 from app.db.database import get_db
 from app.db.models import AuditLog, Notification, User
@@ -235,6 +242,7 @@ def list_tickets(
     scope: str = Query("mine", pattern="^(mine|all|assigned|pool)$"),
     status_filter: str = Query("", alias="status"),
     keyword: str = "",
+    paging: PageParams | None = Depends(page_params),
     user: User = Depends(require_permission(VIEW)),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -255,10 +263,12 @@ def list_tickets(
     if keyword.strip():
         pattern = f"%{keyword.strip()}%"
         query = query.where(or_(ServiceTicket.title.ilike(pattern), ServiceTicket.ticket_no.ilike(pattern), ServiceTicket.requester_name.ilike(pattern)))
-    rows = db.scalars(query).all()
     if status_filter == "超时":
-        rows = [row for row in rows if is_overdue(row)]
-    return {"data": [ticket_payload(row, db) for row in rows]}
+        # Overdue is computed in Python, so filter first and page the result.
+        rows, meta = paginate_list([row for row in db.scalars(query).all() if is_overdue(row)], paging)
+    else:
+        rows, meta = paginate_select(db, query, paging)
+    return page_response([ticket_payload(row, db) for row in rows], meta)
 
 
 @router.post("/tickets", status_code=status.HTTP_201_CREATED)
