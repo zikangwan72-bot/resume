@@ -28,6 +28,7 @@ export default defineConfig({
         JWT_SECRET: 'playwright-secret',
         APP_ENV: 'development',
         SEED_DEMO: 'true',
+        LOG_LEVEL: 'WARNING',
       },
       url: 'http://127.0.0.1:8001/api/v1/health',
       reuseExistingServer: false,
