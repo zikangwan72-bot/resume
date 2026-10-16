@@ -587,7 +587,7 @@ def overdue_request(db_session):
         select(ApprovalUser).where(ApprovalUser.email == "manager01@demo.local")
     )
     approver = db_session.scalar(
-        select(ApprovalUser).where(ApprovalUser.email == "zhangsan@demo.local")
+        select(ApprovalUser).where(ApprovalUser.email == "manager04@demo.local")
     )
     submitted_at = datetime.now(UTC) - timedelta(hours=5)
     request = ApprovalRequest(
@@ -685,7 +685,7 @@ def test_monitor_filters_pending_requests_and_reports_overdue(
     assert item["process_app"]["code"] == "expense"
     assert item["applicant"]["department"] == "产品与流程创新"
     assert item["current_node"]["node_key"] == "manager"
-    assert item["current_approver"]["email"] == "zhangsan@demo.local"
+    assert item["current_approver"]["email"] == "manager04@demo.local"
     assert item["overdue"] is True
 
 

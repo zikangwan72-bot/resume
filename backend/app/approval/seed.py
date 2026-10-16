@@ -28,11 +28,13 @@ APPROVAL_USERS = [
         "role": "department_manager",
     },
     {
+        # Same id as login user manager04; the login identity is authoritative
+        # (see app/db/user_merge.py), so the approval profile mirrors it.
         "id": "44444444-4444-4444-4444-444444444444",
-        "email": "zhangsan@demo.local",
-        "display_name": "张三",
-        "department": "产品研发部",
-        "position": "产品经理",
+        "email": "manager04@demo.local",
+        "display_name": "流程创新经理",
+        "department": "流程创新中心",
+        "position": "部门经理",
         "role": "department_manager",
     },
     {

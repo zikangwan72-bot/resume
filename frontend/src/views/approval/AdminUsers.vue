@@ -31,6 +31,11 @@ const roleOptions = [
   { label: 'HR', value: 'hr' },
   { label: '财务', value: 'finance' },
   { label: '分管副总', value: 'vp' },
+  // Roles carried over from login accounts (see backend app/db/user_merge.py).
+  { label: '招聘管理员', value: 'recruitment_admin' },
+  { label: '资产管理员', value: 'asset_admin' },
+  { label: 'IT运维', value: 'it_support' },
+  { label: '员工', value: 'employee' },
 ]
 
 const filteredUsers = computed(() => {
