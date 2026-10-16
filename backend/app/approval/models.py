@@ -148,3 +148,18 @@ class ApprovalAction(ApprovalBase):
     action: Mapped[str] = mapped_column(String(20), nullable=False)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+
+
+class ApprovalReturnContext(ApprovalBase):
+    __tablename__ = "approval_return_contexts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    source_node_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_node_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    target_user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    target_user_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

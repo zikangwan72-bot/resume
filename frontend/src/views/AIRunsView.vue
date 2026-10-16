@@ -20,10 +20,9 @@ onMounted(load)
 
 <template>
   <div class="page-frame">
-    <header class="page-heading"><div><p class="eyebrow">AI GOVERNANCE</p><h1>AI运行记录</h1><p>统一记录模型、任务、成本、延迟与人工复核状态。</p></div></header>
-    <a-alert type="warning" show-icon message="模型服务尚未配置" description="当前只建立治理结构，不会发送真实模型请求。" class="page-alert" />
+    <header class="page-heading"><div><p class="eyebrow">AI OPERATIONS</p><h1>AI运行记录</h1><p>查看模型任务、成本、延迟与人工复核状态。</p></div></header>
     <a-alert v-if="failed" class="page-alert" type="error" show-icon message="运行记录加载失败"><template #action><a-button size="small" @click="load">重试</a-button></template></a-alert>
-    <a-table v-else :columns="columns" :data-source="rows" :loading="loading" row-key="id" :scroll="{ x: 840 }" class="data-table">
+    <a-table v-else :columns="columns" :data-source="rows" :loading="loading" row-key="id" :scroll="{ x: 840 }" class="data-table" :locale="{ emptyText: '暂无AI运行记录' }">
       <template #bodyCell="{ column, record }">
         <a-tag v-if="column.dataIndex === 'status'">{{ record.status }}</a-tag>
         <span v-else-if="column.dataIndex === 'human_review'">{{ record.human_review ? '需要' : '不需要' }}</span>

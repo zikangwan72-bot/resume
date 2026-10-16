@@ -58,17 +58,17 @@ async function loginAsAdmin(page: Page) {
     localStorage.removeItem('enterprise_ai_user')
   })
   await page.reload()
-  await page.getByRole('button', { name: /平台管理员/ }).click()
+  await page.getByRole('button', { name: /平台管理员 · 平台管理员 admin@demo\.local/ }).click()
   await page.getByRole('button', { name: /安全进入/ }).click()
   await expect(page).toHaveURL(/dashboard/)
 }
 
-async function setupMonitorApi(page: Page) {
+async function setupMonitorApi(page: Page, options: { summaryStatus?: number } = {}) {
   const requestQueries: URLSearchParams[] = []
   let mutations = 0
   await page.route('**/api/v1/admin/process-apps', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [{ id: 3, code: 'purchase', name: '采购申请' }] }) }))
   await page.route('**/api/v1/admin/users', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: users }) }))
-  await page.route('**/api/v1/admin/process-monitor/summary', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { total: 12, pending: 4, approved: 3, rejected: 2, revoked: 1, overdue: 2 } }) }))
+  await page.route('**/api/v1/admin/process-monitor/summary', route => route.fulfill({ status: options.summaryStatus || 200, contentType: 'application/json', body: JSON.stringify(options.summaryStatus && options.summaryStatus >= 400 ? { detail: '统计失败' } : { data: { total: 12, pending: 4, approved: 3, rejected: 2, revoked: 1, overdue: 2 } }) }))
   await page.route('**/api/v1/admin/process-monitor/requests**', route => {
     requestQueries.push(new URL(route.request().url()).searchParams)
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { items: [monitorItem], total: 31, page: 1, page_size: 20 } }) })
@@ -80,6 +80,16 @@ async function setupMonitorApi(page: Page) {
   await page.route('**/api/v1/approvals/requests/88', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: detail }) }))
   return { requestQueries, mutations: () => mutations }
 }
+
+test('keeps request data visible when only the summary endpoint fails', async ({ page }) => {
+  await setupMonitorApi(page, { summaryStatus: 500 })
+  await loginAsAdmin(page)
+  await page.goto('/admin/process-monitor')
+
+  await expect(page.getByText('统计汇总暂时不可用，流程实例仍可正常查看')).toBeVisible()
+  await expect(page.getByRole('row', { name: /采购申请.*张三.*领导会签.*张三.*李四/ })).toBeVisible()
+  await expect(page.getByText('流程实例加载失败')).toHaveCount(0)
+})
 
 test('monitors processes with all typed filters and a read-only request drawer', async ({ page }) => {
   test.setTimeout(60_000)
@@ -101,8 +111,18 @@ test('monitors processes with all typed filters and a read-only request drawer',
   await page.getByLabel('运行状态筛选').click()
   await page.getByText('审批中', { exact: true }).last().click()
   await page.getByPlaceholder('开始日期').click()
-  await page.locator('.ant-picker-dropdown:not(.ant-picker-dropdown-hidden) td[title="2026-07-20"] .ant-picker-cell-inner').click()
-  await page.locator('.ant-picker-dropdown:not(.ant-picker-dropdown-hidden) td[title="2026-07-24"] .ant-picker-cell-inner').click()
+  const picker = page.locator('.ant-picker-dropdown:not(.ant-picker-dropdown-hidden)')
+  const selectDate = async (title: string) => {
+    let cell = picker.locator(`td[title="${title}"] .ant-picker-cell-inner`)
+    if (await cell.count() === 0) {
+      await picker.locator('.ant-picker-header-prev-btn').first().click()
+      cell = picker.locator(`td[title="${title}"] .ant-picker-cell-inner`)
+    }
+    await expect(cell).toHaveCount(1)
+    await cell.click()
+  }
+  await selectDate('2026-07-20')
+  await selectDate('2026-07-24')
   await page.getByLabel('申请部门筛选').fill('产品研发部')
   await page.getByLabel('申请人筛选').fill('张三')
   await page.getByLabel('当前审批人筛选').click()

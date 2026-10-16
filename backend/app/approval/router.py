@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import desc, select, update
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ from app.approval.models import (
     ApprovalAction,
     ApprovalNode,
     ApprovalRequest,
+    ApprovalReturnContext,
     ApprovalType,
     ApprovalUser,
     FlowTemplate,
@@ -57,6 +58,11 @@ class TransferBody(BaseModel):
     target_user_id: str
 
 
+class ResubmitBody(BaseModel):
+    form_data: dict
+    comment: str | None = None
+
+
 # ── Helper functions ──
 
 
@@ -80,6 +86,14 @@ def _current_request_for_node(db: Session, node: ApprovalNode) -> ApprovalReques
 
 def _can_view_request(request: ApprovalRequest, user: User, db: Session) -> bool:
     if request.applicant_id == user.id or "approval:manage" in user.permissions:
+        return True
+    if db.scalar(
+        select(ApprovalReturnContext.id).where(
+            ApprovalReturnContext.request_id == request.id,
+            ApprovalReturnContext.target_user_id == user.id,
+            ApprovalReturnContext.status == "active",
+        )
+    ) is not None:
         return True
     return (
         db.scalar(
@@ -109,17 +123,12 @@ def _type_with_form(approval_type: ApprovalType, db: Session) -> dict:
     }
 
 
-def _request_detail(request: ApprovalRequest, db: Session) -> dict:
-    nodes = db.scalars(
-        select(ApprovalNode)
-        .where(ApprovalNode.request_id == request.id)
-        .order_by(ApprovalNode.node_index, ApprovalNode.id)
-    ).all()
-    actions = db.scalars(
-        select(ApprovalAction)
-        .where(ApprovalAction.request_id == request.id)
-        .order_by(desc(ApprovalAction.created_at))
-    ).all()
+def _request_payload(
+    request: ApprovalRequest,
+    nodes: list[ApprovalNode],
+    actions: list[ApprovalAction],
+    return_context: ApprovalReturnContext | None,
+) -> dict:
     return {
         "id": request.id,
         "type_id": request.type_id,
@@ -161,11 +170,90 @@ def _request_detail(request: ApprovalRequest, db: Session) -> dict:
             }
             for a in actions
         ],
+        "return_context": {
+            "id": return_context.id,
+            "source_node_index": return_context.source_node_index,
+            "target_node_index": return_context.target_node_index,
+            "target_user_id": return_context.target_user_id,
+            "target_user_name": return_context.target_user_name,
+            "reason": return_context.reason,
+            "status": return_context.status,
+            "created_at": return_context.created_at.isoformat(),
+        }
+        if return_context
+        else None,
         "created_at": request.created_at.isoformat(),
         "updated_at": request.updated_at.isoformat(),
         "submitted_at": request.submitted_at.isoformat() if request.submitted_at else None,
         "completed_at": request.completed_at.isoformat() if request.completed_at else None,
     }
+
+
+def _request_detail(request: ApprovalRequest, db: Session) -> dict:
+    nodes = db.scalars(
+        select(ApprovalNode)
+        .where(ApprovalNode.request_id == request.id)
+        .order_by(ApprovalNode.node_index, ApprovalNode.id)
+    ).all()
+    actions = db.scalars(
+        select(ApprovalAction)
+        .where(ApprovalAction.request_id == request.id)
+        .order_by(desc(ApprovalAction.created_at))
+    ).all()
+    return_context = db.scalar(
+        select(ApprovalReturnContext)
+        .where(
+            ApprovalReturnContext.request_id == request.id,
+            ApprovalReturnContext.status == "active",
+        )
+        .order_by(desc(ApprovalReturnContext.created_at), desc(ApprovalReturnContext.id))
+    )
+    return _request_payload(request, nodes, actions, return_context)
+
+
+def _request_details(requests: list[ApprovalRequest], db: Session) -> list[dict]:
+    if not requests:
+        return []
+    request_ids = [request.id for request in requests]
+    nodes_by_request: dict[int, list[ApprovalNode]] = {request_id: [] for request_id in request_ids}
+    actions_by_request: dict[int, list[ApprovalAction]] = {
+        request_id: [] for request_id in request_ids
+    }
+    contexts_by_request: dict[int, ApprovalReturnContext] = {}
+    for node in db.scalars(
+        select(ApprovalNode)
+        .where(ApprovalNode.request_id.in_(request_ids))
+        .order_by(ApprovalNode.request_id, ApprovalNode.node_index, ApprovalNode.id)
+    ).all():
+        nodes_by_request[node.request_id].append(node)
+    for action in db.scalars(
+        select(ApprovalAction)
+        .where(ApprovalAction.request_id.in_(request_ids))
+        .order_by(ApprovalAction.request_id, desc(ApprovalAction.created_at))
+    ).all():
+        actions_by_request[action.request_id].append(action)
+    for context in db.scalars(
+        select(ApprovalReturnContext)
+        .where(
+            ApprovalReturnContext.request_id.in_(request_ids),
+            ApprovalReturnContext.status == "active",
+        )
+        .order_by(
+            ApprovalReturnContext.request_id,
+            desc(ApprovalReturnContext.created_at),
+            desc(ApprovalReturnContext.id),
+        )
+    ).all():
+        contexts_by_request.setdefault(context.request_id, context)
+    return [
+        _request_payload(
+            request,
+            nodes_by_request[request.id],
+            actions_by_request[request.id],
+            contexts_by_request.get(request.id),
+        )
+        for request in requests
+    ]
 
 
 def _is_empty_value(value: object) -> bool:
@@ -357,7 +445,7 @@ def _flow_node_at_index(request: ApprovalRequest, node_index: int) -> dict | Non
 def _consume_pending_node(
     db: Session,
     node: ApprovalNode,
-    expected_approver_id: int,
+    expected_approver_id: str,
     status_value: str,
     comment: str,
     now: datetime,
@@ -372,6 +460,53 @@ def _consume_pending_node(
         .values(status=status_value, comment=comment, acted_at=now)
     )
     return result.rowcount == 1
+
+
+def _active_return_context(db: Session, request_id: int) -> ApprovalReturnContext | None:
+    return db.scalar(
+        select(ApprovalReturnContext)
+        .where(
+            ApprovalReturnContext.request_id == request_id,
+            ApprovalReturnContext.status == "active",
+        )
+        .order_by(desc(ApprovalReturnContext.created_at), desc(ApprovalReturnContext.id))
+    )
+
+
+def _return_target(
+    db: Session,
+    request: ApprovalRequest,
+    source_node_index: int,
+) -> tuple[ApprovalUser, int | None]:
+    previous_indexes = sorted(
+        {
+            int(node["index"])
+            for node in request.flow_snapshot
+            if isinstance(node, dict)
+            and isinstance(node.get("index"), int)
+            and node["index"] < source_node_index
+        }
+    )
+    if previous_indexes:
+        previous_index = previous_indexes[-1]
+        action = db.scalar(
+            select(ApprovalAction)
+            .join(ApprovalNode, ApprovalAction.node_id == ApprovalNode.id)
+            .where(
+                ApprovalAction.request_id == request.id,
+                ApprovalAction.action == "approve",
+                ApprovalNode.node_index == previous_index,
+            )
+            .order_by(desc(ApprovalAction.created_at), desc(ApprovalAction.id))
+        )
+        if action:
+            actor = db.get(ApprovalUser, action.actor_id)
+            if actor and actor.is_active:
+                return actor, previous_index
+    applicant = db.get(ApprovalUser, request.applicant_id)
+    if not applicant or not applicant.is_active:
+        raise HTTPException(status_code=400, detail="返工接收人不存在或已停用")
+    return applicant, None
 
 
 def _snapshot_flow(path: list[dict]) -> list[dict]:
@@ -449,11 +584,16 @@ def list_apps(
         .where(ProcessApp.status == "published")
         .order_by(ProcessApp.name, ProcessApp.id)
     ).all()
+    version_ids = [app.current_version_id for app in apps if app.current_version_id is not None]
+    versions = {
+        version.id: version
+        for version in db.scalars(
+            select(ProcessVersion).where(ProcessVersion.id.in_(version_ids))
+        ).all()
+    }
     result = []
     for app in apps:
-        if app.current_version_id is None:
-            continue
-        version = db.get(ProcessVersion, app.current_version_id)
+        version = versions.get(app.current_version_id)
         if version and version.process_app_id == app.id and version.status == "published":
             result.append(serialize_process_app(app, version))
     return {"data": result}
@@ -615,7 +755,7 @@ def list_my_requests(
         stmt = stmt.where(ApprovalRequest.status == status)
     stmt = stmt.order_by(desc(ApprovalRequest.created_at)).limit(100)
     rows = db.scalars(stmt).all()
-    return {"data": [_request_detail(r, db) for r in rows]}
+    return {"data": _request_details(rows, db)}
 
 
 @router.get("/requests/{request_id}")
@@ -630,6 +770,152 @@ def get_request(
     if not _can_view_request(req, user, db):
         raise HTTPException(status_code=403, detail="无权查看该申请")
     return {"data": _request_detail(req, db)}
+
+
+@router.post("/requests/{request_id}/resubmit")
+def resubmit_returned_request(
+    request_id: int,
+    body: ResubmitBody,
+    user: User = Depends(require_permission("approval:view")),
+    db: Session = Depends(get_approval_db),
+) -> dict[str, Any]:
+    request = db.get(ApprovalRequest, request_id)
+    if not request:
+        raise HTTPException(status_code=404, detail="申请不存在")
+    context = _active_return_context(db, request_id)
+    if request.status != "revision" or not context:
+        raise HTTPException(status_code=400, detail="申请当前不处于返工状态")
+    if context.target_user_id != user.id:
+        raise HTTPException(status_code=403, detail="您不是本次返工处理人")
+    if not isinstance(request.form_schema_snapshot, dict):
+        raise HTTPException(status_code=400, detail="申请表单快照不可用")
+    _validate_form_data(body.form_data, request.form_schema_snapshot)
+
+    now = datetime.now(UTC)
+    restored = db.execute(
+        update(ApprovalNode)
+        .where(
+            ApprovalNode.request_id == request.id,
+            ApprovalNode.node_index == context.source_node_index,
+            ApprovalNode.status == "returned",
+        )
+        .values(status="pending", comment=None, acted_at=None)
+    )
+    if restored.rowcount < 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="返工节点状态已变化，请刷新后重试")
+    request_update = db.execute(
+        update(ApprovalRequest)
+        .where(
+            ApprovalRequest.id == request.id,
+            ApprovalRequest.status == "revision",
+            ApprovalRequest.current_node_index == context.source_node_index,
+        )
+        .values(status="pending", form_data=deepcopy(body.form_data), updated_at=now)
+    )
+    context_update = db.execute(
+        update(ApprovalReturnContext)
+        .where(
+            ApprovalReturnContext.id == context.id,
+            ApprovalReturnContext.status == "active",
+        )
+        .values(status="completed", completed_at=now)
+    )
+    if request_update.rowcount != 1 or context_update.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="返工状态已变化，请刷新后重试")
+    source_node = db.scalar(
+        select(ApprovalNode)
+        .where(
+            ApprovalNode.request_id == request.id,
+            ApprovalNode.node_index == context.source_node_index,
+        )
+        .order_by(ApprovalNode.id)
+    )
+    db.add(
+        ApprovalAction(
+            node_id=source_node.id if source_node else 0,
+            request_id=request.id,
+            actor_id=user.id,
+            actor_name=user.display_name,
+            action="resubmit",
+            comment=(
+                body.comment.strip()
+                if body.comment and body.comment.strip()
+                else "修改后重新提交"
+            ),
+        )
+    )
+    db.commit()
+    request = db.get(ApprovalRequest, request.id)
+    return {"data": _request_detail(request, db)}
+
+
+@router.post("/nodes/{node_id}/return")
+def return_node(
+    node_id: int,
+    body: ApproveRejectBody,
+    user: User = Depends(require_permission("approval:view")),
+    db: Session = Depends(get_approval_db),
+) -> dict[str, Any]:
+    if not body.comment.strip():
+        raise HTTPException(status_code=400, detail="退回必须填写原因")
+    node = db.get(ApprovalNode, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="节点不存在")
+    if node.approver_id != user.id:
+        raise HTTPException(status_code=403, detail="您不是该节点的审批人")
+    if node.status != "pending":
+        raise HTTPException(status_code=400, detail="该节点已被处理，不可退回")
+    request = _current_request_for_node(db, node)
+    if _active_return_context(db, request.id):
+        raise HTTPException(status_code=409, detail="申请已在返工中")
+    target, target_node_index = _return_target(db, request, node.node_index)
+    now = datetime.now(UTC)
+    request_update = db.execute(
+        update(ApprovalRequest)
+        .where(
+            ApprovalRequest.id == request.id,
+            ApprovalRequest.status == "pending",
+            ApprovalRequest.current_node_index == node.node_index,
+        )
+        .values(status="revision", updated_at=now)
+    )
+    returned_nodes = db.execute(
+        update(ApprovalNode)
+        .where(
+            ApprovalNode.request_id == request.id,
+            ApprovalNode.node_index == node.node_index,
+            ApprovalNode.status.in_(["pending", "approved"]),
+        )
+        .values(status="returned", comment=body.comment.strip(), acted_at=now)
+    )
+    if request_update.rowcount != 1 or returned_nodes.rowcount < 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="申请状态已变化，无法退回")
+    context = ApprovalReturnContext(
+        request_id=request.id,
+        source_node_index=node.node_index,
+        target_node_index=target_node_index,
+        target_user_id=target.id,
+        target_user_name=target.display_name,
+        reason=body.comment.strip(),
+        status="active",
+    )
+    db.add(context)
+    db.add(
+        ApprovalAction(
+            node_id=node.id,
+            request_id=request.id,
+            actor_id=user.id,
+            actor_name=user.display_name,
+            action="return",
+            comment=body.comment.strip(),
+        )
+    )
+    db.commit()
+    request = db.get(ApprovalRequest, request.id)
+    return {"data": _request_detail(request, db)}
 
 
 @router.post("/nodes/{node_id}/approve")
@@ -954,7 +1240,56 @@ def list_pending(
                     },
                 }
             )
+    return_contexts = db.scalars(
+        select(ApprovalReturnContext)
+        .where(
+            ApprovalReturnContext.target_user_id == user.id,
+            ApprovalReturnContext.status == "active",
+        )
+        .order_by(desc(ApprovalReturnContext.created_at))
+        .limit(100)
+    ).all()
+    for context in return_contexts:
+        req = db.get(ApprovalRequest, context.request_id)
+        if req and req.status == "revision":
+            result.append(
+                {
+                    "node_id": 0,
+                    "node_index": context.target_node_index,
+                    "kind": "revision",
+                    "request": {
+                        "id": req.id,
+                        "type_id": req.type_id,
+                        "applicant_name": req.applicant_name,
+                        "title": req.title,
+                        "status": req.status,
+                        "current_node_index": req.current_node_index,
+                        "created_at": req.created_at.isoformat(),
+                    },
+                }
+            )
     return {"data": result}
+
+
+@router.get("/overview")
+def approval_overview(
+    user: User = Depends(require_permission("approval:view")),
+    db: Session = Depends(get_approval_db),
+) -> dict[str, Any]:
+    pending = list_pending(user, db)["data"]
+    handled_count = db.scalar(
+        select(func.count(ApprovalNode.id)).where(
+            ApprovalNode.approver_id == user.id,
+            ApprovalNode.status != "pending",
+        )
+    ) or 0
+    return {
+        "data": {
+            "pending_count": len(pending),
+            "handled_count": handled_count,
+            "pending_items": pending[:5],
+        }
+    }
 
 
 @router.get("/users")
@@ -972,7 +1307,9 @@ def list_approval_users(
                 "email": r.email,
                 "display_name": r.display_name,
                 "department": r.department,
+                "position": r.position,
                 "role": r.role,
+                "is_active": r.is_active,
             }
             for r in rows
         ]

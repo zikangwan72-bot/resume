@@ -1,31 +1,42 @@
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
-from app.core.security import create_access_token, get_current_user, require_permission
 from app.business.asset_router import router as asset_router
 from app.business.recruitment_router import router as recruitment_router
+from app.business.service_desk_router import router as service_desk_router
+from app.core.config import settings
+from app.core.security import (
+    create_access_token,
+    get_current_user,
+    require_permission,
+    verify_password,
+)
 from app.db.database import get_db
 from app.db.models import AIRun, AuditLog, Notification, User
+from app.db.seed import DEMO_PASSWORD, DEMO_USERS
+from app.integrations.supabase import get_supabase_status
+from app.integrations.storage import StorageUploadError, upload_bytes
 
 router = APIRouter()
 
 router.include_router(asset_router)
 router.include_router(recruitment_router)
+router.include_router(service_desk_router)
 
 MODULES = [
     {
         "key": "resume-screening",
-        "name": "AI简历筛选",
+        "name": "招聘管理系统",
         "short_name": "人才筛选",
-        "description": "从岗位要求到候选人评估的可解释AI辅助流程。",
-        "planned_ai": ["简历解析", "语义匹配", "排序解释", "公平性评估"],
+        "description": "管理岗位、候选人、AI初筛、面试推进和人才库。",
+        "planned_ai": ["简历解析", "岗位匹配", "面试问题", "人工复核"],
         "permission": "resume:view",
         "accent": "cyan",
         "status": "foundation",
@@ -44,8 +55,8 @@ MODULES = [
         "key": "asset-management",
         "name": "全资产管理",
         "short_name": "资产运营",
-        "description": "建立资产台账与过程管理，逐步增加异常识别和处置建议。",
-        "planned_ai": ["制度RAG", "异常解释", "处置建议", "资产Copilot"],
+        "description": "管理资产台账、批量导入、二维码自助盘点和异常处置。",
+        "planned_ai": ["台账管理", "批量导入", "扫码盘点", "异常处置"],
         "permission": "asset:view",
         "accent": "green",
         "status": "foundation",
@@ -67,6 +78,16 @@ class DemoLoginRequest(BaseModel):
     role: str = "platform_admin"
 
 
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+def require_demo_environment() -> None:
+    if not settings.demo_auth_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+
 def user_payload(user: User) -> dict[str, Any]:
     return {
         "id": user.id,
@@ -78,39 +99,91 @@ def user_payload(user: User) -> dict[str, Any]:
     }
 
 
+def auth_payload(user: User) -> dict[str, Any]:
+    return {"access_token": create_access_token(user), "user": user_payload(user)}
+
+
+def write_login_audit(db: Session, request: Request, user: User, action: str) -> None:
+    db.add(
+        AuditLog(
+            actor_id=user.id,
+            actor_name=user.display_name,
+            action=action,
+            resource="authentication",
+            request_id=getattr(request.state, "request_id", str(uuid4())),
+            detail={"role": user.role, "email": user.email},
+        )
+    )
+
+
 @router.get("/health")
 def health() -> dict[str, Any]:
+    supabase = get_supabase_status()
     return {
         "data": {
             "status": "healthy",
             "app": settings.app_name,
             "database": settings.database_mode,
-            "supabase": "configured" if settings.supabase_configured else "not_configured",
+            "supabase": "configured" if supabase.configured else "not_configured",
+            "supabase_details": {
+                "database": supabase.database,
+                "auth": supabase.auth,
+                "storage": supabase.storage,
+                "auth_mode": supabase.auth_mode,
+                "storage_mode": supabase.storage_mode,
+                "message": supabase.message,
+            },
             "ai": "configured" if settings.ai_configured else "not_configured",
             "timestamp": datetime.now(UTC).isoformat(),
         }
     }
 
 
+@router.get("/auth/demo-accounts")
+def demo_accounts() -> dict[str, Any]:
+    require_demo_environment()
+    return {
+        "data": {
+            "password": DEMO_PASSWORD,
+            "accounts": [
+                {
+                    "email": item["email"],
+                    "display_name": item["display_name"],
+                    "department": item["department"],
+                    "role": item["role"],
+                }
+                for item in DEMO_USERS
+            ],
+        }
+    }
+
+
+@router.post("/auth/login")
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    user = db.scalar(select(User).where(User.email == payload.email.strip().lower()))
+    if (
+        user is None
+        or not user.is_active
+        or not verify_password(payload.password, user.password_hash)
+    ):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    write_login_audit(db, request, user, "password_login")
+    db.commit()
+    return {"data": auth_payload(user)}
+
+
 @router.post("/auth/demo-login")
 def demo_login(
     payload: DemoLoginRequest, request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
-    user = db.scalar(select(User).where(User.role == payload.role))
+    require_demo_environment()
+    role = payload.role
+    user = db.scalar(select(User).where(User.role == role).order_by(User.created_at))
     if user is None:
         raise HTTPException(status_code=400, detail="Unknown demo role")
-    db.add(
-        AuditLog(
-            actor_id=user.id,
-            actor_name=user.display_name,
-            action="demo_login",
-            resource="authentication",
-            request_id=getattr(request.state, "request_id", str(uuid4())),
-            detail={"role": user.role},
-        )
-    )
+    write_login_audit(db, request, user, "demo_login")
     db.commit()
-    return {"data": {"access_token": create_access_token(user), "user": user_payload(user)}}
+    return {"data": auth_payload(user)}
 
 
 @router.get("/auth/me")
@@ -134,8 +207,8 @@ def module_summary(module_key: str, user: User = Depends(get_current_user)) -> d
     return {
         "data": {
             **module,
-            "stage": "Foundation only",
-            "message": "公共架构已完成，详细业务将在后续迭代中实现。",
+            "stage": "Available",
+            "message": "模块已接入真实数据和可操作流程。",
         }
     }
 
@@ -227,9 +300,30 @@ def ai_runs(
     }
 
 
-@router.post("/files/upload-url", status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-def file_upload_placeholder(_: User = Depends(get_current_user)) -> None:
-    raise HTTPException(
-        status_code=503,
-        detail="Supabase Storage is not configured. Add credentials before enabling uploads.",
-    )
+@router.post("/files/upload", status_code=status.HTTP_201_CREATED)
+async def upload_file(
+    file: UploadFile = File(...), _: User = Depends(get_current_user)
+) -> dict[str, Any]:
+    content = await file.read()
+    suffix = Path(file.filename or "upload").suffix.lower()
+    relative_path = Path("uploads") / "files" / f"{uuid4()}{suffix}"
+    content_type = file.content_type or "application/octet-stream"
+    try:
+        storage_path = upload_bytes(relative_path.as_posix(), content, content_type)
+    except StorageUploadError as exc:
+        if settings.app_env.lower() == "production":
+            raise HTTPException(status_code=503, detail="云端文件存储不可用，请稍后重试") from exc
+        storage_path = None
+    if storage_path is None:
+        target = Path(__file__).resolve().parents[3] / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        storage_path = str(relative_path)
+    return {
+        "data": {
+            "filename": file.filename or "upload",
+            "content_type": content_type,
+            "size": len(content),
+            "storage_path": storage_path,
+        }
+    }

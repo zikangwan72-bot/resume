@@ -17,8 +17,14 @@ DIRECTOR_USER_ID = "11111111-1111-1111-1111-111111111111"
 FINANCE_USER_ID = "77777777-7777-7777-7777-777777777777"
 
 
-def _headers(client, role: str) -> dict[str, str]:
-    response = client.post("/api/v1/auth/demo-login", json={"role": role})
+def _headers(client, account: str) -> dict[str, str]:
+    if "@" in account:
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"email": account, "password": "Demo@2026!"},
+        )
+    else:
+        response = client.post("/api/v1/auth/demo-login", json={"role": account})
     token = response.json()["data"]["access_token"]
     return {"Authorization": f"Bearer {token}"}
 
@@ -249,7 +255,9 @@ def test_apps_lists_only_active_published_apps_usable_by_applicants(client, admi
     )
     assert draft.status_code == 201
 
-    response = client.get("/api/v1/approvals/apps", headers=_headers(client, "product_demo_user"))
+    response = client.get(
+        "/api/v1/approvals/apps", headers=_headers(client, "manager01@demo.local")
+    )
 
     assert response.status_code == 200
     apps = response.json()["data"]
@@ -363,7 +371,7 @@ def test_countersign_requires_every_configured_approver_before_advancing(client,
 
     manager_approval = client.post(
         f"/api/v1/approvals/nodes/{manager_node['id']}/approve",
-        headers=_headers(client, "product_demo_user"),
+        headers=_headers(client, "manager01@demo.local"),
         json={"comment": "同意"},
     )
     assert manager_approval.status_code == 200
@@ -381,7 +389,7 @@ def test_countersign_requires_every_configured_approver_before_advancing(client,
 
     second_countersign = client.post(
         f"/api/v1/approvals/nodes/{director_nodes[1]['id']}/approve",
-        headers=_headers(client, "product_demo_user"),
+        headers=_headers(client, "manager01@demo.local"),
         json={"comment": "同意"},
     )
     assert second_countersign.status_code == 200
@@ -398,7 +406,7 @@ def test_countersign_rejection_finishes_request_and_cancels_remaining_siblings(
     manager_node = request["nodes"][0]
     client.post(
         f"/api/v1/approvals/nodes/{manager_node['id']}/approve",
-        headers=_headers(client, "product_demo_user"),
+        headers=_headers(client, "manager01@demo.local"),
         json={"comment": "同意"},
     )
     countersign_nodes = [
@@ -425,6 +433,120 @@ def test_countersign_rejection_finishes_request_and_cancels_remaining_siblings(
         "cancelled",
     ]
     assert detail["nodes"][0]["status"] == "approved"
+
+
+def test_first_node_return_allows_applicant_rework_and_resumes_source_node(client, admin_headers):
+    app = _create_and_publish_app(client, admin_headers, _single_step_definition())
+    request = client.post(
+        "/api/v1/approvals/requests",
+        headers=admin_headers,
+        json=_submit_body(app["id"], key="first-node-return"),
+    ).json()["data"]
+    manager_headers = _headers(client, "manager01@demo.local")
+
+    returned = client.post(
+        f"/api/v1/approvals/nodes/{request['nodes'][0]['id']}/return",
+        headers=manager_headers,
+        json={"comment": "请补充采购说明"},
+    )
+
+    assert returned.status_code == 200
+    returned_data = returned.json()["data"]
+    assert returned_data["status"] == "revision"
+    assert returned_data["nodes"][0]["status"] == "returned"
+    assert returned_data["return_context"]["target_user_id"] == returned_data["applicant_id"]
+
+    unauthorized = client.post(
+        f"/api/v1/approvals/requests/{request['id']}/resubmit",
+        headers=manager_headers,
+        json={"form_data": {"amount": 120000, "item_name": "服务器和存储"}},
+    )
+    assert unauthorized.status_code == 403
+
+    pending = client.get("/api/v1/approvals/pending", headers=admin_headers)
+    assert any(
+        item.get("kind") == "revision" and item["request"]["id"] == request["id"]
+        for item in pending.json()["data"]
+    )
+    overview = client.get("/api/v1/approvals/overview", headers=admin_headers)
+    assert overview.status_code == 200
+    assert overview.json()["data"]["pending_count"] >= 1
+    assert any(
+        item.get("kind") == "revision" and item["request"]["id"] == request["id"]
+        for item in overview.json()["data"]["pending_items"]
+    )
+
+    resubmitted = client.post(
+        f"/api/v1/approvals/requests/{request['id']}/resubmit",
+        headers=admin_headers,
+        json={
+            "form_data": {"amount": 120000, "item_name": "服务器和存储"},
+            "comment": "材料已补充",
+        },
+    )
+
+    assert resubmitted.status_code == 200
+    data = resubmitted.json()["data"]
+    assert data["status"] == "pending"
+    assert data["current_node_index"] == 0
+    assert data["nodes"][0]["status"] == "pending"
+    assert data["form_data"]["item_name"] == "服务器和存储"
+    assert data["return_context"] is None
+    assert [action["action"] for action in data["actions"][:2]] == ["resubmit", "return"]
+
+    duplicate = client.post(
+        f"/api/v1/approvals/requests/{request['id']}/resubmit",
+        headers=admin_headers,
+        json={"form_data": data["form_data"]},
+    )
+    assert duplicate.status_code == 400
+
+
+def test_middle_node_return_targets_previous_actor_and_resumes_returning_node(
+    client, admin_headers
+):
+    app = _create_and_publish_app(client, admin_headers, _branching_definition())
+    request = client.post(
+        "/api/v1/approvals/requests",
+        headers=admin_headers,
+        json=_submit_body(app["id"], key="middle-node-return"),
+    ).json()["data"]
+    manager_headers = _headers(client, "manager01@demo.local")
+    approved = client.post(
+        f"/api/v1/approvals/nodes/{request['nodes'][0]['id']}/approve",
+        headers=manager_headers,
+        json={"comment": "经理同意"},
+    ).json()["data"]
+    director_node = next(node for node in approved["nodes"] if node["node_key"] == "director")
+
+    returned = client.post(
+        f"/api/v1/approvals/nodes/{director_node['id']}/return",
+        headers=admin_headers,
+        json={"comment": "请经理补充供应商比较"},
+    )
+
+    assert returned.status_code == 200
+    returned_data = returned.json()["data"]
+    assert returned_data["return_context"]["target_user_id"] == PRODUCT_USER_ID
+    assert returned_data["return_context"]["target_node_index"] == 0
+
+    resubmitted = client.post(
+        f"/api/v1/approvals/requests/{request['id']}/resubmit",
+        headers=manager_headers,
+        json={
+            "form_data": {"amount": 120000, "item_name": "服务器（已补充比价）"},
+            "comment": "已完成局部返工",
+        },
+    )
+
+    assert resubmitted.status_code == 200
+    data = resubmitted.json()["data"]
+    assert data["status"] == "pending"
+    assert data["current_node_index"] == 1
+    manager = next(node for node in data["nodes"] if node["node_key"] == "manager")
+    director = next(node for node in data["nodes"] if node["node_key"] == "director")
+    assert manager["status"] == "approved"
+    assert director["status"] == "pending"
 
 
 @pytest.mark.parametrize(
@@ -638,7 +760,7 @@ def test_transfer_requires_enabled_target_and_node_permission(client, admin_head
     ).json()["data"]
     disallowed = client.post(
         f"/api/v1/approvals/nodes/{disallowed_request['nodes'][0]['id']}/transfer",
-        headers=_headers(client, "product_demo_user"),
+        headers=_headers(client, "manager01@demo.local"),
         json={"target_user_id": DIRECTOR_USER_ID},
     )
     assert disallowed.status_code == 400
@@ -651,17 +773,17 @@ def test_transfer_requires_enabled_target_and_node_permission(client, admin_head
     db_session.commit()
     transferable_request = client.post(
         "/api/v1/approvals/requests",
-        headers=_headers(client, "product_demo_user"),
+        headers=_headers(client, "manager01@demo.local"),
         json=_submit_body(transferable_app["id"], key="transfer-inactive"),
     ).json()["data"]
     self_transfer = client.post(
         f"/api/v1/approvals/nodes/{transferable_request['nodes'][0]['id']}/transfer",
-        headers=_headers(client, "product_demo_user"),
+        headers=_headers(client, "manager01@demo.local"),
         json={"target_user_id": PRODUCT_USER_ID},
     )
     inactive = client.post(
         f"/api/v1/approvals/nodes/{transferable_request['nodes'][0]['id']}/transfer",
-        headers=_headers(client, "product_demo_user"),
+        headers=_headers(client, "manager01@demo.local"),
         json={"target_user_id": DIRECTOR_USER_ID},
     )
     assert self_transfer.status_code == 400
@@ -684,12 +806,12 @@ def test_low_value_branch_skips_director_and_duplicate_approval_writes_one_actio
 
     first = client.post(
         f"/api/v1/approvals/nodes/{request['nodes'][0]['id']}/approve",
-        headers=_headers(client, "product_demo_user"),
+        headers=_headers(client, "manager01@demo.local"),
         json={"comment": "同意"},
     )
     second = client.post(
         f"/api/v1/approvals/nodes/{request['nodes'][0]['id']}/approve",
-        headers=_headers(client, "product_demo_user"),
+        headers=_headers(client, "manager01@demo.local"),
         json={"comment": "再次同意"},
     )
 
@@ -726,7 +848,7 @@ def test_terminal_revoke_and_urge_return_conflict_without_new_urge_action(
     ).json()["data"]
     approved = client.post(
         f"/api/v1/approvals/nodes/{request['nodes'][0]['id']}/approve",
-        headers=_headers(client, "product_demo_user"),
+        headers=_headers(client, "manager01@demo.local"),
         json={"comment": "同意"},
     )
     assert approved.status_code == 200
@@ -794,8 +916,8 @@ def test_concurrent_approvals_consume_once_and_countersign_advances_once(
     ).json()["data"]
     duplicate_results = concurrent_approvals(
         [
-            (request["nodes"][0]["id"], PRODUCT_USER_ID, "产品演示用户"),
-            (request["nodes"][0]["id"], PRODUCT_USER_ID, "产品演示用户"),
+            (request["nodes"][0]["id"], PRODUCT_USER_ID, "产品研发经理"),
+            (request["nodes"][0]["id"], PRODUCT_USER_ID, "产品研发经理"),
         ]
     )
 
@@ -813,7 +935,7 @@ def test_concurrent_approvals_consume_once_and_countersign_advances_once(
     ).json()["data"]
     client.post(
         f"/api/v1/approvals/nodes/{countersign_request['nodes'][0]['id']}/approve",
-        headers=_headers(client, "product_demo_user"),
+        headers=_headers(client, "manager01@demo.local"),
         json={"comment": "同意"},
     )
     detail = client.get(
@@ -823,7 +945,7 @@ def test_concurrent_approvals_consume_once_and_countersign_advances_once(
     countersign_results = concurrent_approvals(
         [
             (countersign_nodes[0]["id"], DIRECTOR_USER_ID, "平台管理员"),
-            (countersign_nodes[1]["id"], PRODUCT_USER_ID, "产品演示用户"),
+            (countersign_nodes[1]["id"], PRODUCT_USER_ID, "产品研发经理"),
         ]
     )
 
@@ -870,7 +992,7 @@ def test_transfer_race_prevents_stale_approver_from_consuming_reassigned_node(
                 handler(
                     node_id,
                     approval_router.ApproveRejectBody(comment="处理意见"),
-                    SimpleNamespace(id=PRODUCT_USER_ID, display_name="产品演示用户"),
+                    SimpleNamespace(id=PRODUCT_USER_ID, display_name="产品研发经理"),
                     db,
                 )
                 return 200
@@ -885,7 +1007,7 @@ def test_transfer_race_prevents_stale_approver_from_consuming_reassigned_node(
             transferred = approval_router.transfer_node(
                 node_id,
                 approval_router.TransferBody(target_user_id=DIRECTOR_USER_ID),
-                SimpleNamespace(id=PRODUCT_USER_ID, display_name="产品演示用户"),
+                SimpleNamespace(id=PRODUCT_USER_ID, display_name="产品研发经理"),
                 db,
             )
             assert transferred["data"]["nodes"][0]["approver_id"] == DIRECTOR_USER_ID
@@ -927,7 +1049,7 @@ def test_revoke_racing_terminal_approval_preserves_revoked_status(
                 approval_router.approve_node(
                     request["nodes"][0]["id"],
                     approval_router.ApproveRejectBody(comment="同意"),
-                    SimpleNamespace(id=PRODUCT_USER_ID, display_name="产品演示用户"),
+                    SimpleNamespace(id=PRODUCT_USER_ID, display_name="产品研发经理"),
                     db,
                 )
                 return 200
@@ -990,7 +1112,7 @@ def test_current_node_authorization_and_request_transitions_use_process_apps(cli
 
     manager_approval = client.post(
         f"/api/v1/approvals/nodes/{manager_node['id']}/approve",
-        headers=_headers(client, "product_demo_user"),
+        headers=_headers(client, "manager01@demo.local"),
         json={"comment": "同意"},
     )
     assert manager_approval.status_code == 200

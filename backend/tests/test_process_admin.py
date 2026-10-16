@@ -1,12 +1,15 @@
+import re
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import inspect, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 
 from app.approval.database import ApprovalSessionLocal, approval_engine, get_approval_db
+from app.approval.admin_router import _overdue_condition
 from app.approval.models import (
     ApprovalNode,
     ApprovalRequest,
@@ -99,7 +102,10 @@ def test_admin_process_app_routes_require_an_approval_manager(client):
     anonymous = client.get("/api/v1/admin/process-apps")
     assert anonymous.status_code == 401
 
-    login = client.post("/api/v1/auth/demo-login", json={"role": "product_demo_user"})
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"email": "manager01@demo.local", "password": "Demo@2026!"},
+    )
     response = client.get(
         "/api/v1/admin/process-apps",
         headers={"Authorization": f"Bearer {login.json()['data']['access_token']}"},
@@ -118,6 +124,74 @@ def test_admin_creates_draft_and_publishes_version(client, admin_headers, valid_
     assert published.status_code == 200
     assert published.json()["data"]["status"] == "published"
     assert published.json()["data"]["version_number"] == 1
+
+
+@pytest.mark.parametrize(
+    ("category", "prefix"),
+    [
+        ("人事", "HR"),
+        ("财务", "FIN"),
+        ("采购", "PUR"),
+        ("行政", "ADM"),
+        ("通用", "GEN"),
+        ("通用审批", "GEN"),
+    ],
+)
+def test_process_app_create_generates_builtin_category_code(
+    client, admin_headers, valid_definition, category, prefix
+):
+    payload = {**valid_definition, "category": category}
+    payload.pop("code")
+
+    response = client.post("/api/v1/admin/process-apps", headers=admin_headers, json=payload)
+
+    assert response.status_code == 201
+    assert re.fullmatch(rf"{prefix}-\d{{8}}-[A-Z0-9]{{4}}", response.json()["data"]["code"])
+
+
+def test_custom_category_uses_custom_prefix_and_unique_codes(
+    client, admin_headers, valid_definition
+):
+    payload = {**valid_definition, "category": "项目管理"}
+    payload.pop("code")
+
+    first = client.post("/api/v1/admin/process-apps", headers=admin_headers, json=payload)
+    second = client.post(
+        "/api/v1/admin/process-apps",
+        headers=admin_headers,
+        json={**payload, "name": "项目申请二"},
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    first_code = first.json()["data"]["code"]
+    second_code = second.json()["data"]["code"]
+    assert re.fullmatch(r"CUS-\d{8}-[A-Z0-9]{4}", first_code)
+    assert first_code != second_code
+
+
+def test_process_app_create_ignores_client_owned_code(client, admin_headers, valid_definition):
+    response = client.post(
+        "/api/v1/admin/process-apps",
+        headers=admin_headers,
+        json={**valid_definition, "code": "client-owned-code"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["data"]["code"] != "client-owned-code"
+
+
+def test_process_app_update_rejects_code_change_for_draft(client, admin_headers, valid_definition):
+    created = _create_process_app(client, admin_headers, valid_definition)
+
+    response = client.put(
+        f"/api/v1/admin/process-apps/{created['id']}",
+        headers=admin_headers,
+        json={"code": "manually-changed"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "已生成的流程编号不可修改"
 
 
 def test_publishing_returns_exact_structured_definition_validation_error(
@@ -200,7 +274,7 @@ def test_copy_creates_uniquely_coded_draft_apps(client, admin_headers, valid_def
     assert first_copy.status_code == 201
     assert second_copy.status_code == 201
     assert first_copy.json()["data"]["status"] == "draft"
-    assert first_copy.json()["data"]["code"].startswith(f"{valid_definition['code']}-copy")
+    assert first_copy.json()["data"]["code"].startswith(f"{created['code']}-copy")
     assert first_copy.json()["data"]["code"] != second_copy.json()["data"]["code"]
 
 
@@ -255,9 +329,7 @@ def test_editing_an_inactive_app_creates_draft_v2_and_preserves_v1_after_republi
     assert updated.json()["data"]["version_number"] == 2
     assert updated.json()["data"]["version_status"] == "draft"
 
-    republished = client.post(
-        f"/api/v1/admin/process-apps/{app_id}/publish", headers=admin_headers
-    )
+    republished = client.post(f"/api/v1/admin/process-apps/{app_id}/publish", headers=admin_headers)
     assert republished.status_code == 200
     assert republished.json()["data"]["version_number"] == 2
     assert republished.json()["data"]["status"] == "published"
@@ -286,10 +358,13 @@ def test_process_app_list_uses_current_published_version_and_exposes_draft(
 ):
     created = _create_process_app(client, admin_headers, valid_definition)
     app_id = created["id"]
-    published = client.post(
-        f"/api/v1/admin/process-apps/{app_id}/publish", headers=admin_headers
-    )
+    published = client.post(f"/api/v1/admin/process-apps/{app_id}/publish", headers=admin_headers)
     assert published.status_code == 200
+
+    listed_without_draft = client.get("/api/v1/admin/process-apps", headers=admin_headers)
+    published_item = next(row for row in listed_without_draft.json()["data"] if row["id"] == app_id)
+    assert published_item["has_draft"] is False
+    assert published_item["draft_version_number"] is None
 
     updated = client.put(
         f"/api/v1/admin/process-apps/{app_id}",
@@ -509,7 +584,7 @@ def overdue_request(db_session):
     process_app = db_session.scalar(select(ProcessApp).where(ProcessApp.code == "expense"))
     version = db_session.get(ProcessVersion, process_app.current_version_id)
     applicant = db_session.scalar(
-        select(ApprovalUser).where(ApprovalUser.email == "product@demo.local")
+        select(ApprovalUser).where(ApprovalUser.email == "manager01@demo.local")
     )
     approver = db_session.scalar(
         select(ApprovalUser).where(ApprovalUser.email == "zhangsan@demo.local")
@@ -570,7 +645,7 @@ def legacy_request(db_session):
     process_app = db_session.scalar(select(ProcessApp).where(ProcessApp.code == "expense"))
     version = db_session.get(ProcessVersion, process_app.current_version_id)
     applicant = db_session.scalar(
-        select(ApprovalUser).where(ApprovalUser.email == "product@demo.local")
+        select(ApprovalUser).where(ApprovalUser.email == "manager01@demo.local")
     )
     request = ApprovalRequest(
         process_app_id=process_app.id,
@@ -614,6 +689,14 @@ def test_monitor_filters_pending_requests_and_reports_overdue(
     assert item["overdue"] is True
 
 
+def test_monitor_overdue_condition_uses_postgresql_interval_arithmetic():
+    statement = select(ApprovalNode.id).where(_overdue_condition("postgresql"))
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert "julianday" not in sql
+    assert "INTERVAL '1 hour'" in sql
+
+
 def test_monitor_requests_support_typed_filters_pagination_and_admin_read_only(
     client, admin_headers, overdue_request
 ):
@@ -644,17 +727,24 @@ def test_monitor_requests_support_typed_filters_pagination_and_admin_read_only(
         {"submitted_from": "not-a-date"},
         {"status": "not-a-status"},
     ):
-        assert client.get(
-            "/api/v1/admin/process-monitor/requests", params=query, headers=admin_headers
-        ).status_code == 422
+        assert (
+            client.get(
+                "/api/v1/admin/process-monitor/requests", params=query, headers=admin_headers
+            ).status_code
+            == 422
+        )
 
     anonymous = client.get("/api/v1/admin/process-monitor/summary")
     assert anonymous.status_code == 401
-    employee_login = client.post("/api/v1/auth/demo-login", json={"role": "product_demo_user"})
+    employee_login = client.post(
+        "/api/v1/auth/login",
+        json={"email": "employee01@demo.local", "password": "Demo@2026!"},
+    )
     employee_headers = {"Authorization": f"Bearer {employee_login.json()['data']['access_token']}"}
-    assert client.get(
-        "/api/v1/admin/process-monitor/requests", headers=employee_headers
-    ).status_code == 403
+    assert (
+        client.get("/api/v1/admin/process-monitor/requests", headers=employee_headers).status_code
+        == 403
+    )
 
 
 def test_monitor_countersign_filter_matches_second_pending_approver(

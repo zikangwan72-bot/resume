@@ -14,7 +14,7 @@ const failed = ref(false)
 const statusFilter = ref<string | undefined>(undefined)
 
 const statusTagMap: Record<string, string> = { pending: 'processing', approved: 'success', rejected: 'error', revoked: 'default' }
-const statusTextMap: Record<string, string> = { pending: '审批中', approved: '已通过', rejected: '已驳回', revoked: '已撤回' }
+const statusTextMap: Record<string, string> = { pending: '审批中', revision: '待修改', approved: '已通过', rejected: '已驳回', revoked: '已撤回' }
 
 async function load() {
   loading.value = true
@@ -37,7 +37,7 @@ onMounted(load)
         <h1>我的申请</h1>
       </div>
       <div class="heading-actions">
-        <PageBackButton fallback="/modules/approval-center" />
+        <div class="heading-actions"><PageBackButton fallback="/modules/approval-center" /></div>
         <a-button type="primary" @click="router.push('/modules/approval-center/new')"><PlusOutlined /> 发起申请</a-button>
       </div>
     </header>

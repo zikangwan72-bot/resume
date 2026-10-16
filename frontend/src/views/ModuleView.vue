@@ -64,11 +64,11 @@ const canRetry = () => errorStatus.value === null || errorStatus.value >= 500
     <template v-else-if="module">
       <header class="page-heading">
         <div>
-          <p class="eyebrow">MODULE FOUNDATION / {{ module.key.toUpperCase() }}</p>
+          <p class="eyebrow">MODULE OVERVIEW / {{ module.key.toUpperCase() }}</p>
           <h1>{{ module.name }}</h1>
           <p>{{ module.description }}</p>
         </div>
-        <a-tag color="processing"><ClockCircleOutlined /> Foundation only</a-tag>
+          <a-tag :color="module.key === 'service-desk' ? 'orange' : 'processing'"><ClockCircleOutlined /> {{ module.key === 'service-desk' ? '基础入口' : '业务可用' }}</a-tag>
       </header>
 
       <a-card class="flow-section" :bordered="false">

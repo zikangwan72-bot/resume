@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import {
-  ArrowDownOutlined, ArrowUpOutlined, CopyOutlined, DeleteOutlined, PlusOutlined,
+  ArrowDownOutlined, ArrowUpOutlined, CopyOutlined, DeleteOutlined, HolderOutlined, PlusOutlined,
 } from '@ant-design/icons-vue'
+import ApprovalFieldControl from '@/components/approval/ApprovalFieldControl.vue'
 import type { DetailColumn, DetailColumnType, FormField, FormSchema } from '@/types/approval'
 
 const props = defineProps<{ modelValue: FormSchema }>()
@@ -23,7 +24,10 @@ const columnTypes: Array<{ value: DetailColumnType; label: string }> = [
   { value: 'text', label: '文本' }, { value: 'number', label: '数字' }, { value: 'money', label: '金额' }, { value: 'date', label: '日期' }, { value: 'select', label: '下拉选择' },
 ]
 const selectedId = ref<string | null>(null)
-const selected = computed(() => props.modelValue.fields.find((field) => field.id === selectedId.value) ?? null)
+const previewValues = ref<Record<string, string | number | string[] | Record<string, unknown>[] | null>>({})
+const draggedId = ref<string | null>(null)
+const fieldKey = (field: Pick<FormField, 'id' | 'key'>) => field.id || field.key
+const selected = computed(() => props.modelValue.fields.find((field) => fieldKey(field) === selectedId.value) ?? null)
 const fieldId = () => crypto.randomUUID()
 const optionError = (options?: string[]) => {
   const normalized = (options ?? []).map((option) => option.trim())
@@ -33,7 +37,8 @@ const optionError = (options?: string[]) => {
 
 function defaultField(type: FieldType): FormField {
   const label = palette.find((item) => item.type === type)?.label ?? '字段'
-  return { id: fieldId(), key: `field_${Date.now()}`, label, type, required: false, options: choiceTypes.has(type) ? ['选项 1'] : undefined, columns: type === 'detail_table' ? [] : undefined }
+  const id = fieldId()
+  return { id, key: id, label, type, required: false, options: choiceTypes.has(type) ? ['选项 1'] : undefined, columns: type === 'detail_table' ? [] : undefined }
 }
 function update(fields: FormField[]) { emit('update:modelValue', { fields }) }
 function add(type: FieldType) {
@@ -46,16 +51,39 @@ function patchField(patch: Partial<FormField>) {
   update(props.modelValue.fields.map((field) => field.id === selected.value?.id ? { ...field, ...patch } : field))
 }
 function duplicate(field: FormField) {
-  const copy = { ...field, id: fieldId(), key: `${field.key}_copy`, label: `${field.label}（副本）`, options: field.options ? [...field.options] : undefined, columns: field.columns?.map((column) => ({ ...column, id: fieldId(), options: column.options ? [...column.options] : undefined })) }
+  const id = fieldId()
+  const copy = { ...field, id, key: id, label: `${field.label}（副本）`, options: field.options ? [...field.options] : undefined, columns: field.columns?.map((column) => { const columnId = fieldId(); return { ...column, id: columnId, key: columnId, options: column.options ? [...column.options] : undefined } }) }
   const index = props.modelValue.fields.indexOf(field)
   update([...props.modelValue.fields.slice(0, index + 1), copy, ...props.modelValue.fields.slice(index + 1)])
   selectedId.value = copy.id
 }
-function remove(field: FormField) { update(props.modelValue.fields.filter((item) => item.id !== field.id)); if (selectedId.value === field.id) selectedId.value = null }
+function remove(field: FormField) {
+  const id = fieldKey(field)
+  update(props.modelValue.fields.filter((item) => fieldKey(item) !== id))
+  delete previewValues.value[id]
+  if (selectedId.value === id) selectedId.value = null
+}
 function move(field: FormField, direction: -1 | 1) {
   const index = props.modelValue.fields.indexOf(field); const target = index + direction
   if (target < 0 || target >= props.modelValue.fields.length) return
   const fields = [...props.modelValue.fields]; [fields[index], fields[target]] = [fields[target], fields[index]]; update(fields)
+}
+function startDrag(field: FormField, event: DragEvent) {
+  draggedId.value = fieldKey(field)
+  event.dataTransfer?.setData('text/plain', draggedId.value)
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+}
+function dropOn(target: FormField) {
+  const sourceId = draggedId.value
+  draggedId.value = null
+  if (!sourceId || sourceId === fieldKey(target)) return
+  const fields = [...props.modelValue.fields]
+  const sourceIndex = fields.findIndex((field) => fieldKey(field) === sourceId)
+  const targetIndex = fields.findIndex((field) => fieldKey(field) === fieldKey(target))
+  if (sourceIndex < 0 || targetIndex < 0) return
+  const [source] = fields.splice(sourceIndex, 1)
+  fields.splice(targetIndex, 0, source)
+  update(fields)
 }
 function updateOption(index: number, value: string) { if (selected.value) patchField({ options: (selected.value.options ?? []).map((option, itemIndex) => itemIndex === index ? value.trim() : option) }) }
 function addOption() { if (selected.value) patchField({ options: [...(selected.value.options ?? []), ''] }) }
@@ -83,17 +111,30 @@ function removeColumnOption(column: DetailColumn, index: number) { patchColumn(c
         <strong>申请人信息</strong><span>姓名、邮箱、部门、职位将在提交时自动带入</span>
       </div>
       <a-empty v-if="!modelValue.fields.length" description="从左侧选择字段开始设计" />
-      <ul v-else class="field-list" aria-label="业务字段">
-        <li v-for="(field, index) in modelValue.fields" :key="field.id" :data-field-id="field.id" :class="['field-row', { selected: selectedId === field.id }]">
-          <button class="field-select" :aria-label="`选择字段 ${field.label}`" @click="selectedId = field.id"><span class="field-copy"><strong>{{ field.label }}</strong><span>{{ field.type }}</span></span></button>
+      <a-form v-else layout="vertical" class="field-list" aria-label="业务字段">
+        <article
+          v-for="(field, index) in modelValue.fields"
+          :key="fieldKey(field)"
+          :data-field-id="fieldKey(field)"
+          :class="['design-field', { selected: selectedId === fieldKey(field), dragging: draggedId === fieldKey(field) }]"
+          @click="selectedId = fieldKey(field)"
+          @dragover.prevent
+          @drop.prevent="dropOn(field)"
+        >
           <div class="field-actions">
+            <a-tooltip title="选择"><a-button type="text" :aria-label="`选择字段 ${field.label}`" @click.stop="selectedId = fieldKey(field)"><PlusOutlined /></a-button></a-tooltip>
+            <a-tooltip title="拖动排序"><a-button type="text" draggable="true" aria-label="拖动字段" @dragstart.stop="startDrag(field, $event)" @dragend="draggedId = null"><HolderOutlined /></a-button></a-tooltip>
             <a-tooltip title="上移"><a-button type="text" :disabled="index === 0" aria-label="上移字段" @click.stop="move(field, -1)"><ArrowUpOutlined /></a-button></a-tooltip>
             <a-tooltip title="下移"><a-button type="text" :disabled="index === modelValue.fields.length - 1" aria-label="下移字段" @click.stop="move(field, 1)"><ArrowDownOutlined /></a-button></a-tooltip>
             <a-tooltip title="复制"><a-button type="text" aria-label="复制字段" @click.stop="duplicate(field)"><CopyOutlined /></a-button></a-tooltip>
             <a-tooltip title="删除"><a-button type="text" danger aria-label="删除字段" @click.stop="remove(field)"><DeleteOutlined /></a-button></a-tooltip>
           </div>
-        </li>
-      </ul>
+          <ApprovalFieldControl v-if="field.type === 'section'" :field="field" preview />
+          <a-form-item v-else :label="field.label" :required="field.required" :extra="field.help">
+            <ApprovalFieldControl v-model="previewValues[fieldKey(field)]" :field="field" preview />
+          </a-form-item>
+        </article>
+      </a-form>
     </main>
     <aside class="properties" aria-label="字段属性">
       <a-empty v-if="!selected" description="选择一个字段后编辑属性" />
@@ -118,7 +159,7 @@ function removeColumnOption(column: DetailColumn, index: number) { patchColumn(c
         <template v-if="selected.type === 'detail_table'">
           <a-divider orientation="left">明细列</a-divider>
           <div v-for="column in selected.columns" :key="column.id" class="column-editor">
-            <a-input aria-label="明细列编号" :value="column.key" @update:value="patchColumn(column.id, { key: $event.trim(), id: $event.trim() || column.id })" />
+            <a-input aria-label="明细列编号" :value="column.key" @update:value="patchColumn(column.id, { key: $event.trim() })" />
             <a-input aria-label="明细列名称" :value="column.label" @update:value="patchColumn(column.id, { label: $event })" />
             <a-select aria-label="明细列类型" :value="column.type" :options="columnTypes" @update:value="patchColumn(column.id, { type: $event as DetailColumnType, options: $event === 'select' ? (column.options ?? ['']) : undefined })" />
             <a-checkbox :checked="column.required" aria-label="明细列必填" @update:checked="patchColumn(column.id, { required: $event })">必填</a-checkbox>
@@ -136,8 +177,8 @@ function removeColumnOption(column: DetailColumn, index: number) { patchColumn(c
 .designer { display: grid; grid-template-columns: 190px minmax(320px, 1fr) 270px; min-height: 540px; border: 1px solid #d9d9d9; background: #fff; overflow: hidden; }
 .palette, .properties { padding: 16px; background: #fafafa; min-width: 0; } .palette { border-right: 1px solid #f0f0f0; } .properties { border-left: 1px solid #f0f0f0; }
 h3 { margin: 0 0 12px; font-size: 14px; } .palette-grid { display: grid; grid-template-columns: 1fr; gap: 8px; } .palette-grid :deep(.ant-btn) { text-align: left; }
-.canvas { min-width: 0; padding: 20px; background: #f5f5f5; } .applicant-lock { display: flex; flex-direction: column; gap: 4px; padding: 14px; border: 1px solid #91caff; background: #e6f4ff; } .applicant-lock span, .field-copy span { color: #8c8c8c; font-size: 12px; }
-.field-list { display: grid; gap: 10px; padding: 0; margin: 16px 0 0; list-style: none; } .field-row { display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid #d9d9d9; background: #fff; } .field-row.selected { border-color: #1677ff; box-shadow: 0 0 0 2px #e6f4ff; } .field-select { display: grid; flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; } .field-copy { display: grid; gap: 2px; min-width: 0; } .field-actions { display: flex; flex: 0 0 auto; }
+.canvas { min-width: 0; padding: 20px; background: #f5f5f5; } .applicant-lock { display: flex; flex-direction: column; gap: 4px; padding: 14px; border: 1px solid #91caff; background: #e6f4ff; } .applicant-lock span { color: #8c8c8c; font-size: 12px; }
+.field-list { display: grid; gap: 12px; margin: 16px 0 0; } .design-field { position: relative; min-width: 0; padding: 48px 16px 8px; border: 1px solid #d9d9d9; background: #fff; } .design-field.selected { border-color: #1677ff; box-shadow: 0 0 0 2px #e6f4ff; } .design-field.dragging { opacity: .55; } .design-field :deep(.ant-form-item) { margin-bottom: 12px; } .field-actions { position: absolute; z-index: 1; top: 4px; right: 6px; display: flex; flex: 0 0 auto; padding-left: 8px; background: #fff; }
 .option-line, .column-editor { display: flex; gap: 6px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; } .column-editor :deep(.ant-input), .column-editor :deep(.ant-select) { min-width: 120px; flex: 1; } .column-options { width: 100%; }
-@media (max-width: 760px) { .designer { grid-template-columns: 1fr; overflow: visible; } .palette, .properties { border: 0; border-bottom: 1px solid #f0f0f0; } .palette-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .canvas { padding: 12px; } .field-actions { gap: 0; } }
+@media (max-width: 899px) { .designer { grid-template-columns: 1fr; overflow: visible; } .palette, .properties { border: 0; border-bottom: 1px solid #f0f0f0; } .palette-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .canvas { padding: 12px; } .design-field { padding-inline: 12px; } .field-actions { gap: 0; } }
 </style>

@@ -19,7 +19,7 @@ onMounted(load)
 
 <template>
   <div class="page-frame">
-    <header class="page-heading"><div><p class="eyebrow">GOVERNANCE</p><h1>审计日志</h1><p>追踪关键操作、资源和请求ID。</p></div></header>
+    <header class="page-heading"><div><p class="eyebrow">AUDIT LOGS</p><h1>审计日志</h1><p>追踪关键操作、资源和请求ID。</p></div></header>
     <a-alert v-if="failed" class="page-alert" type="error" show-icon message="审计日志加载失败"><template #action><a-button size="small" @click="load">重试</a-button></template></a-alert>
     <a-table v-else :columns="columns" :data-source="rows" :loading="loading" row-key="id" :scroll="{ x: 800 }" class="data-table" />
   </div>

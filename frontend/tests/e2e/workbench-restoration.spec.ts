@@ -1,0 +1,58 @@
+import { expect, test } from '@playwright/test'
+
+test('restores all trial accounts and opens the workbench after login', async ({ page }) => {
+  await page.goto('/login')
+  await page.evaluate(() => {
+    localStorage.removeItem('enterprise_ai_token')
+    localStorage.removeItem('enterprise_ai_user')
+    localStorage.removeItem('enterprise_ai_post_login_redirect')
+  })
+  await page.reload()
+
+  await expect(page.getByRole('heading', { name: '企业AI工作流平台' })).toBeVisible()
+  await expect(page.locator('.role-option')).toHaveCount(20)
+  await expect(page.getByRole('button', { name: /资产管理员A/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /员工一/ })).toBeVisible()
+
+  await page.locator('input[autocomplete="username"]').fill('admin@demo.local')
+  await page.locator('input[autocomplete="current-password"]').fill('Demo@2026!')
+  await page.getByRole('button', { name: /安全进入/ }).click()
+
+  await expect(page).toHaveURL(/\/dashboard$/)
+  await expect(page.getByRole('heading', { name: '工作台' })).toBeVisible()
+  await expect(page.locator('.module-card')).toHaveCount(4)
+  const modules = page.locator('.module-grid')
+  await expect(modules.getByRole('heading', { name: 'AI 简历筛选' })).toBeVisible()
+  await expect(modules.getByRole('heading', { name: '流程审批中心' })).toBeVisible()
+  await expect(modules.getByRole('heading', { name: '全资产管理' })).toBeVisible()
+  await expect(modules.getByRole('heading', { name: '企业IT服务台' })).toBeVisible()
+  const businessGroup = page.locator('.ant-menu-item-group').filter({ hasText: '业务模块' })
+  const managementMenu = page.locator('.ant-menu-submenu').filter({ hasText: '管理与审核' })
+  await expect(businessGroup.locator('.ant-menu-item')).toHaveCount(4)
+  await expect(managementMenu.getByText('业务配置', { exact: true })).toBeVisible()
+  await expect(managementMenu.getByText('组织管理', { exact: true })).toBeVisible()
+  await expect(managementMenu.getByText('平台治理', { exact: true })).toBeVisible()
+  const businessConfig = managementMenu.locator('.ant-menu-item-group').filter({ hasText: '业务配置' })
+  await expect(businessConfig.locator('.ant-menu-item')).toHaveText(['流程应用', '流程监控'])
+  await expect(managementMenu.getByText('员工管理', { exact: true })).toBeVisible()
+  await expect(managementMenu.getByText('审计日志', { exact: true })).toBeVisible()
+  await expect(page.locator('.app-sider').getByText('发起申请', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.app-sider').getByText('我的申请', { exact: true })).toHaveCount(0)
+  await page.screenshot({ path: '../artifacts/screenshots/workbench-restored-desktop.png', fullPage: true })
+})
+
+test('keeps the restored workbench readable on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/login')
+  await page.locator('input[autocomplete="username"]').fill('admin@demo.local')
+  await page.locator('input[autocomplete="current-password"]').fill('Demo@2026!')
+  await page.getByRole('button', { name: /安全进入/ }).click()
+  await expect(page.getByRole('heading', { name: '工作台' })).toBeVisible()
+
+  const layout = await page.evaluate(() => ({ viewport: window.innerWidth, scrollWidth: document.documentElement.scrollWidth }))
+  expect(layout.scrollWidth).toBeLessThanOrEqual(layout.viewport)
+  await page.getByRole('button', { name: '切换导航' }).click()
+  await expect(page.locator('.mobile-nav-drawer').getByText('工作台', { exact: true })).toBeVisible()
+  await page.waitForTimeout(500)
+  await page.screenshot({ path: '../artifacts/screenshots/workbench-restored-mobile.png' })
+})

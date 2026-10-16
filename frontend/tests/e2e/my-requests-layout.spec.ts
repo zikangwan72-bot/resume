@@ -2,7 +2,8 @@ import { expect, test } from '@playwright/test'
 
 async function loginAsAdmin(page: import('@playwright/test').Page) {
   await page.goto('/login')
-  await page.getByRole('button', { name: /平台管理员/ }).click()
+  await page.locator('input[autocomplete="username"]').fill('admin@demo.local')
+  await page.locator('input[autocomplete="current-password"]').fill('Demo@2026!')
   await page.getByRole('button', { name: /安全进入/ }).click()
   await expect(page).toHaveURL(/dashboard/)
 }

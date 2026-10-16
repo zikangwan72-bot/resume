@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Enterprise AI Suite 多端业务验收原型</title>
+  <style>
+    :root {
+      --ink: #172033;
+      --muted: #657085;
+      --line: #d9dee8;
+      --surface: #ffffff;
+      --canvas: #f3f5f8;
+      --blue: #1677ff;
+      --cyan: #08979c;
+      --orange: #d46b08;
+      --red: #cf1322;
+      --green: #389e0d;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--canvas);
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      letter-spacing: 0;
+    }
+    button { font: inherit; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 64px;
+      padding: 0 32px;
+      color: #fff;
+      background: #111d2c;
+      border-bottom: 3px solid var(--blue);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; font-weight: 700; }
+    .brand-mark {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      color: white;
+      background: var(--blue);
+      border-radius: 6px;
+    }
+    .top-status { display: flex; gap: 8px; flex-wrap: wrap; }
+    .status-chip {
+      padding: 5px 9px;
+      color: #d9f7be;
+      background: #162312;
+      border: 1px solid #3f6600;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    main { width: min(1500px, calc(100% - 40px)); margin: 28px auto 60px; }
+    .intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 28px;
+      align-items: end;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--line);
+    }
+    .eyebrow { margin: 0 0 6px; color: var(--blue); font-size: 12px; font-weight: 700; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(28px, 4vw, 48px); line-height: 1.15; }
+    .intro p { max-width: 780px; margin: 12px 0 0; color: var(--muted); line-height: 1.8; }
+    .legend { display: grid; grid-template-columns: repeat(3, auto); gap: 8px; }
+    .legend span { padding: 7px 10px; background: #fff; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; }
+    .module-nav, .device-nav, .stage-nav { display: flex; gap: 8px; flex-wrap: wrap; }
+    .module-nav { margin: 24px 0; }
+    .nav-button {
+      min-height: 38px;
+      padding: 0 15px;
+      color: #3b4659;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    .nav-button:hover { color: var(--blue); border-color: #91caff; }
+    .nav-button.active { color: #fff; background: var(--blue); border-color: var(--blue); }
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 18px;
+      align-items: start;
+    }
+    .viewer, .check-panel, .matrix {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 7px;
+    }
+    .viewer { min-width: 0; padding: 18px; }
+    .viewer-header { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 14px; }
+    .viewer-title h2 { margin: 0; font-size: 22px; }
+    .viewer-title p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+    .stage-nav { margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid #edf0f5; }
+    .stage-nav .nav-button { min-height: 32px; padding: 0 11px; font-size: 13px; }
+    .device-shell {
+      position: relative;
+      overflow: hidden;
+      margin: 0 auto;
+      background: #e7ebf1;
+      border: 8px solid #263448;
+      border-radius: 7px;
+      box-shadow: 0 14px 32px rgba(21, 32, 50, .18);
+      transition: width .25s ease;
+    }
+    .device-shell.desktop { width: 100%; aspect-ratio: 16 / 9; }
+    .device-shell.tablet { width: min(760px, 100%); aspect-ratio: 4 / 3; }
+    .device-shell.mobile { width: min(390px, 100%); aspect-ratio: 390 / 844; border-width: 7px; border-radius: 22px; }
+    .device-shell img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+    .pin {
+      position: absolute;
+      display: grid;
+      width: 30px;
+      height: 30px;
+      place-items: center;
+      color: #fff;
+      background: var(--red);
+      border: 3px solid #fff;
+      border-radius: 50%;
+      box-shadow: 0 2px 7px rgba(0, 0, 0, .35);
+      font-size: 12px;
+      font-weight: 800;
+      transform: translate(-50%, -50%);
+    }
+    .check-panel { position: sticky; top: 84px; overflow: hidden; }
+    .check-head { padding: 17px 18px; color: #fff; background: #172b4d; }
+    .check-head h3 { margin: 0; font-size: 17px; }
+    .check-head p { margin: 5px 0 0; color: #b8c7de; font-size: 12px; }
+    .check-list { max-height: 630px; overflow-y: auto; }
+    .check-item { display: grid; grid-template-columns: 30px 1fr; gap: 10px; padding: 14px 16px; border-bottom: 1px solid #edf0f5; }
+    .check-item:last-child { border: 0; }
+    .check-number { display: grid; width: 28px; height: 28px; place-items: center; color: #fff; background: var(--red); border-radius: 50%; font-weight: 800; }
+    .check-item strong { display: block; font-size: 14px; }
+    .check-item p { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .expected { color: var(--green); font-weight: 700; }
+    .matrix { margin-top: 20px; overflow: hidden; }
+    .matrix h2 { margin: 0; padding: 18px; font-size: 19px; border-bottom: 1px solid var(--line); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 12px 14px; border-bottom: 1px solid #edf0f5; text-align: left; vertical-align: top; font-size: 13px; }
+    th { color: #46536a; background: #fafbfc; }
+    .pass { color: var(--green); font-weight: 700; }
+    .priority { font-family: Consolas, monospace; font-weight: 700; }
+    .note { margin: 18px 0 0; padding: 14px 16px; color: #594214; background: #fffbe6; border: 1px solid #ffe58f; border-radius: 6px; line-height: 1.7; font-size: 13px; }
+    @media (max-width: 980px) {
+      .workspace { grid-template-columns: 1fr; }
+      .check-panel { position: static; }
+      .check-list { max-height: none; }
+      .intro { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 620px) {
+      .topbar { padding: 10px 14px; align-items: flex-start; }
+      .brand div:last-child { display: none; }
+      main { width: calc(100% - 20px); margin-top: 16px; }
+      .viewer { padding: 10px; }
+      .viewer-header { align-items: flex-start; flex-direction: column; }
+      .legend { grid-template-columns: 1fr; }
+      th:nth-child(3), td:nth-child(3) { display: none; }
+    }
+    @media print {
+      .topbar { position: static; }
+      .module-nav, .device-nav, .stage-nav { display: none; }
+      .workspace { grid-template-columns: 1fr; }
+      .check-panel { position: static; break-before: page; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">EA</span><div>Enterprise AI Suite · UAT 控制台</div></div>
+    <div class="top-status"><span class="status-chip">真实数据库</span><span class="status-chip">三端覆盖</span><span class="status-chip">AI 暂不验收</span></div>
+  </header>
+
+  <main>
+    <section class="intro">
+      <div>
+        <p class="eyebrow">UAT-20260725 / annotated prototype</p>
+        <h1>多端业务验收原型图</h1>
+        <p>本图直接使用系统真实页面与真实 UAT 结果，不是重新绘制的假页面。切换模块、设备和业务阶段，按红色编号依次完成测试；右侧同步显示操作与通过标准。</p>
+      </div>
+      <div class="legend"><span>桌面 1440×900</span><span>平板 1024×768</span><span>手机 390×844</span></div>
+    </section>
+
+    <nav class="module-nav" id="moduleNav" aria-label="业务模块"></nav>
+
+    <section class="workspace">
+      <article class="viewer">
+        <div class="viewer-header">
+          <div class="viewer-title"><h2 id="moduleTitle"></h2><p id="moduleSummary"></p></div>
+          <div class="device-nav" id="deviceNav" aria-label="设备"></div>
+        </div>
+        <div class="stage-nav" id="stageNav" aria-label="业务阶段"></div>
+        <div class="device-shell desktop" id="deviceShell">
+          <img id="screenImage" alt="真实系统验收页面" />
+          <div id="pins"></div>
+        </div>
+      </article>
+
+      <aside class="check-panel">
+        <div class="check-head"><h3>标注测试位置</h3><p>由上到下执行，红色编号与原型图一致</p></div>
+        <div class="check-list" id="checkList"></div>
+      </aside>
+    </section>
+
+    <section class="matrix">
+      <h2>完整验收覆盖矩阵</h2>
+      <table>
+        <thead><tr><th>模块</th><th>主流程</th><th>桌面端</th><th>平板端</th><th>手机端</th><th>结果</th></tr></thead>
+        <tbody>
+          <tr><td>招聘系统</td><td>岗位发布 → 学生投递 → 重复拦截 → 候选人筛选</td><td>完整操作</td><td>布局与表单</td><td>公开投递与管理列表</td><td class="pass">已留证</td></tr>
+          <tr><td>全资产管理</td><td>建账 → 编辑搜索 → 盘点 → 异常 → 处置归档</td><td>完整操作</td><td>台账与工作台</td><td>移动列表与无横向溢出</td><td class="pass">已留证</td></tr>
+          <tr><td>流程审批</td><td>员工 → 流程搭建 → 发布 → 发起 → 跨角色审批 → 监控</td><td>完整操作</td><td>监控与筛选</td><td>发起、应用与监控</td><td class="pass">已留证</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <p class="note"><strong>验收边界：</strong>本轮验证非 AI 业务底座、真实数据库、权限和响应式页面。RAG、Copilot、Agent 与真实模型调用不属于本轮验收范围。</p>
+  </main>
+
+  <script>
+    const modules = {
+      recruitment: {
+        name: '招聘系统',
+        summary: '验证 C 端学生投递与 B 端招聘管理形成真实数据闭环。',
+        stages: {
+          student: { label: '学生投递端', images: { desktop: '../final-ui-audit/desktop-recruitment-student.png', tablet: '../screenshots/recruitment-student-1024.png', mobile: '../final-ui-audit/mobile-recruitment-student.png' } },
+          admin: { label: '管理端筛选', images: { desktop: '../final-ui-audit/desktop-recruitment-admin.png', tablet: '../screenshots/recruitment-admin-1024.png', mobile: '../final-ui-audit/mobile-recruitment-admin.png' } },
+          evidence: { label: '真实结果', images: { desktop: 'REC-success.png', tablet: 'REC-success.png', mobile: 'UI-mobile-success.png' } }
+        },
+        checks: [
+          ['REC-01', '岗位发布', '新增 UAT 岗位并发布。', '学生端和管理端同时可见。', 72, 16],
+          ['REC-02', '公开投递', '退出登录填写姓名、邮箱、学校、专业和简历。', '无需登录即可成功写入数据库。', 46, 48],
+          ['REC-03', '重复校验', '相同邮箱再次投递相同岗位。', '阻止重复投递并明确提示。', 47, 71],
+          ['REC-04', '候选人池', '管理员搜索刚投递的候选人。', '真实资料完整出现。', 42, 54],
+          ['REC-05', '人工筛选', '把候选人状态改为待面试并刷新。', '状态持久保存。', 72, 55],
+          ['UI-02', '手机端可用性', '390px 宽度检查表单与列表。', '无横向溢出，按钮可点击。', 50, 86]
+        ]
+      },
+      asset: {
+        name: '全资产管理',
+        summary: '验证资产台账、盘点差异与异常处置形成全过程闭环。',
+        stages: {
+          ledger: { label: '资产台账', images: { desktop: '../final-ui-audit/desktop-asset-management.png', tablet: '../screenshots/asset-1024.png', mobile: '../final-ui-audit/mobile-asset-management.png' } },
+          evidence: { label: '异常归档结果', images: { desktop: 'AST-success.png', tablet: 'AST-success.png', mobile: '../screenshots/asset-390.png' } }
+        },
+        checks: [
+          ['AST-01', '资产建账', '新增唯一资产编号、名称、责任人和位置。', '台账与顶部统计同步变化。', 85, 10],
+          ['AST-02', '编辑与搜索', '修改责任人或位置，再按编号搜索。', '刷新后仍保留修改结果。', 46, 43],
+          ['AST-03', '重复编号', '再次提交相同资产编号。', '系统阻止重复数据。', 69, 42],
+          ['AST-04', '建立盘点任务', '选择资产范围并生成盘点记录。', '任务可进入，记录来自真实台账。', 44, 61],
+          ['AST-05', '标记盘点异常', '将资产标记为位置不符并填写说明。', '异常数量增加并生成待处置记录。', 68, 61],
+          ['AST-06', '处置归档', '填写核实结果并归档。', '状态变为已归档，刷新保持。', 79, 76]
+        ]
+      },
+      approval: {
+        name: '流程审批中心',
+        summary: '验证低代码流程从搭建、发布、发起到跨角色审批和全局监控。',
+        stages: {
+          build: { label: '流程搭建', images: { desktop: '../final-ui-audit/desktop-process-apps.png', tablet: '../process-monitor-1024x768.png', mobile: '../final-ui-audit/mobile-process-apps.png' } },
+          submit: { label: '发起申请', images: { desktop: '../final-ui-audit/desktop-approval-new.png', tablet: '../final-ui-audit/desktop-approval-new.png', mobile: '../final-ui-audit/mobile-approval-new.png' } },
+          approve: { label: '跨角色审批', images: { desktop: 'APR-product-approved.png', tablet: 'APR-product-approved.png', mobile: '../final-ui-audit/mobile-approval-home.png' } },
+          monitor: { label: '流程监控', images: { desktop: 'APR-admin-complete.png', tablet: '../process-monitor-1024x768.png', mobile: '../final-ui-audit/mobile-process-monitor.png' } }
+        },
+        checks: [
+          ['APR-01', '员工职位', '新增员工时先不填职位，再补齐保存。', '职位必填校验生效，补齐后成功。', 82, 14],
+          ['APR-02', '三合一流程搭建', '在一个应用内配置表单字段、节点和任意审批人。', '配置可保存并校验通过。', 58, 31],
+          ['APR-03', '发布版本', '发布为 v1 后返回应用列表。', '显示已发布，不误标为有草稿。', 69, 44],
+          ['APR-04', '发起申请', '管理员填写必填字段并提交。', '我的申请出现审批中记录。', 52, 47],
+          ['APR-05', '跨角色审批', '产品演示用户在待办中同意。', '进入我已审批，原申请变为已通过。', 48, 57],
+          ['GOV-01', '流程监控', '按状态、申请人、流程名筛选。', '结果准确，审批人、意见、时间完整。', 66, 35]
+        ]
+      }
+    };
+
+    const devices = { desktop: '桌面端', tablet: '平板端', mobile: '手机端' };
+    let state = { module: 'asset', device: 'desktop', stage: 'ledger' };
+    const $ = (id) => document.getElementById(id);
+
+    function button(label, active, onClick) {
+      const el = document.createElement('button');
+      el.className = `nav-button${active ? ' active' : ''}`;
+      el.textContent = label;
+      el.onclick = onClick;
+      return el;
+    }
+
+    function render() {
+      const current = modules[state.module];
+      if (!current.stages[state.stage]) state.stage = Object.keys(current.stages)[0];
+      $('moduleTitle').textContent = current.name;
+      $('moduleSummary').textContent = current.summary;
+
+      $('moduleNav').replaceChildren(...Object.entries(modules).map(([key, value]) =>
+        button(value.name, key === state.module, () => { state.module = key; state.stage = Object.keys(modules[key].stages)[0]; render(); })
+      ));
+      $('deviceNav').replaceChildren(...Object.entries(devices).map(([key, value]) =>
+        button(value, key === state.device, () => { state.device = key; render(); })
+      ));
+      $('stageNav').replaceChildren(...Object.entries(current.stages).map(([key, value]) =>
+        button(value.label, key === state.stage, () => { state.stage = key; render(); })
+      ));
+
+      const shell = $('deviceShell');
+      shell.className = `device-shell ${state.device}`;
+      $('screenImage').src = current.stages[state.stage].images[state.device];
+      $('screenImage').alt = `${current.name} ${devices[state.device]} ${current.stages[state.stage].label}`;
+      $('pins').replaceChildren(...current.checks.map((item, index) => {
+        const pin = document.createElement('span');
+        pin.className = 'pin';
+        pin.textContent = String(index + 1);
+        pin.style.left = `${item[4]}%`;
+        pin.style.top = `${item[5]}%`;
+        pin.title = `${item[0]} ${item[1]}`;
+        return pin;
+      }));
+      $('checkList').replaceChildren(...current.checks.map((item, index) => {
+        const row = document.createElement('div');
+        row.className = 'check-item';
+        row.innerHTML = `<span class="check-number">${index + 1}</span><div><strong><span class="priority">${item[0]}</span> · ${item[1]}</strong><p>${item[2]}</p><p class="expected">通过：${item[3]}</p></div>`;
+        return row;
+      }));
+    }
+    render();
+  </script>
+</body>
+</html>

@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { useAuthStore } from '@/stores/auth'
 const auth = useAuthStore()
-const roleLabel: Record<string, string> = { platform_admin: '平台管理员', product_demo_user: '产品演示用户', auditor: '审计查看者' }
+const roleLabel: Record<string, string> = {
+  platform_admin: '平台管理员',
+  recruitment_admin: '招聘管理员',
+  asset_admin: '资产管理员',
+  department_manager: '部门经理',
+  approval_finance: '财务审批',
+  employee: '员工',
+}
 </script>
 
 <template>

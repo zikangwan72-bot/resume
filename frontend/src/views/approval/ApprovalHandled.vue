@@ -33,7 +33,7 @@ onMounted(load)
         <h1>我已审批</h1>
         <p>共 {{ items.length }} 条记录</p>
       </div>
-      <PageBackButton fallback="/modules/approval-center" />
+      <div class="heading-actions"><PageBackButton fallback="/modules/approval-center" /></div>
     </header>
 
     <a-skeleton v-if="loading" active :paragraph="{ rows: 6 }" />

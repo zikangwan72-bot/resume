@@ -136,7 +136,7 @@ onMounted(loadApps)
         </div>
 
         <a-empty v-if="filteredApps.length === 0" description="暂无流程应用" />
-        <a-table v-else :data-source="filteredApps" row-key="id" :pagination="false" :scroll="{ x: 1040 }">
+        <a-table v-else class="process-apps-table" :data-source="filteredApps" row-key="id" :pagination="false" :scroll="{ x: 1040 }">
           <a-table-column title="流程应用" :width="220">
             <template #default="{ record }"><strong>{{ record.name }}</strong><span class="code-label">{{ record.code }}</span></template>
           </a-table-column>
@@ -163,6 +163,38 @@ onMounted(loadApps)
             </template>
           </a-table-column>
         </a-table>
+        <a-list v-if="filteredApps.length" class="process-app-mobile-list" :data-source="filteredApps">
+          <template #renderItem="{ item }">
+            <a-list-item class="process-app-mobile-item">
+              <div class="process-app-mobile-heading">
+                <div><strong>{{ item.name }}</strong><small>{{ item.code }}</small></div>
+                <ProcessStatusTag :status="item.status" />
+              </div>
+              <div class="process-app-mobile-meta">
+                <a-tag>{{ item.category }}</a-tag>
+                <span>{{ item.field_count }} 个字段</span>
+                <span>{{ item.approval_node_count }} 个审批节点</span>
+                <span>{{ item.version_number ? 'v' + item.version_number : '暂无发布版本' }}</span>
+                <a-tag v-if="item.has_draft" color="warning">有草稿</a-tag>
+              </div>
+              <div class="process-app-mobile-footer">
+                <small>更新于 {{ formatDate(item.updated_at) }}</small>
+                <a-dropdown :trigger="['click']">
+                  <a-button type="text" aria-label="更多操作"><MoreOutlined /></a-button>
+                  <template #overlay>
+                    <a-menu>
+                      <a-menu-item key="preview" @click="openPreview(item)"><EyeOutlined /> 预览</a-menu-item>
+                      <a-menu-item key="edit" @click="editApp(item)">编辑</a-menu-item>
+                      <a-menu-item key="copy" :disabled="actionLoading === item.id" @click="copyApp(item)"><CopyOutlined /> 复制</a-menu-item>
+                      <a-menu-divider />
+                      <a-menu-item v-if="item.status !== 'inactive'" key="deactivate" danger @click="confirmDeactivate(item)">停用</a-menu-item>
+                    </a-menu>
+                  </template>
+                </a-dropdown>
+              </div>
+            </a-list-item>
+          </template>
+        </a-list>
       </template>
     </a-card>
 
@@ -184,9 +216,18 @@ onMounted(loadApps)
 .process-apps-toolbar .ant-input { width: min(360px, 100%); }
 .process-apps-toolbar .ant-select { min-width: 140px; }
 .code-label { display: block; color: #8c8c8c; font-size: 12px; font-weight: 400; margin-top: 3px; }
+.process-app-mobile-list { display: none; }
 @media (max-width: 720px) {
   .process-apps-toolbar { align-items: stretch; flex-direction: column; }
   .process-apps-toolbar .ant-input, .process-apps-toolbar .ant-select { width: 100%; }
   .process-apps-toolbar .ant-segmented { width: 100%; overflow-x: auto; }
+  .process-apps-table { display: none; }
+  .process-app-mobile-list { display: block; }
+  .process-app-mobile-item { display: block !important; padding: 16px 0 !important; }
+  .process-app-mobile-heading, .process-app-mobile-footer { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .process-app-mobile-heading > div { display: grid; gap: 3px; min-width: 0; }
+  .process-app-mobile-heading small, .process-app-mobile-footer small { color: #8c8c8c; }
+  .process-app-mobile-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 10px; color: #595959; font-size: 12px; }
+  .process-app-mobile-footer { align-items: center; margin-top: 10px; }
 }
 </style>

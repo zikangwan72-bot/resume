@@ -25,13 +25,22 @@ export interface HealthStatus {
   app: string
   database: string
   supabase: string
+  supabase_details?: {
+    database: boolean
+    auth: boolean
+    storage: boolean
+    auth_mode: string
+    storage_mode: string
+    message: string
+  }
   ai: string
   timestamp: string
 }
 
 export interface PendingItem {
   node_id: number
-  node_index: number
+  node_index: number | null
+  kind?: 'revision'
   request: {
     id: number
     type_id: number

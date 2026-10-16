@@ -2,7 +2,8 @@ import { expect, test } from '@playwright/test'
 
 async function loginAsAdmin(page: import('@playwright/test').Page) {
   await page.goto('/login')
-  await page.getByRole('button', { name: /平台管理员/ }).click()
+  await page.locator('input[autocomplete="username"]').fill('admin@demo.local')
+  await page.locator('input[autocomplete="current-password"]').fill('Demo@2026!')
   await page.getByRole('button', { name: /安全进入/ }).click()
   await expect(page).toHaveURL(/dashboard/)
 }
@@ -11,31 +12,29 @@ test('admin can enter the four-module foundation on desktop and mobile', async (
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/login')
   await expect(page.getByRole('heading', { name: '企业AI工作流平台' })).toBeVisible()
-  await page.getByRole('button', { name: /平台管理员/ }).click()
+  await page.locator('input[autocomplete="username"]').fill('admin@demo.local')
+  await page.locator('input[autocomplete="current-password"]').fill('Demo@2026!')
   await page.getByRole('button', { name: /安全进入/ }).click()
   await expect(page).toHaveURL(/dashboard/)
   await expect(page.getByRole('heading', { name: '工作台' })).toBeVisible()
-  await expect(page.locator('.ant-layout-sider')).toHaveCSS('background-color', 'rgb(0, 21, 41)')
+  await expect(page.locator('.ant-layout-sider')).toHaveCSS('background-color', 'rgb(16, 42, 67)')
+  await expect(page.locator('.app-menu .ant-menu-sub.ant-menu-inline')).toHaveCSS('background-color', 'rgb(16, 42, 67)')
   await expect(page.locator('.ant-card').first()).toBeVisible()
-  await expect(page.locator('.ant-btn-primary').first()).toHaveCSS('background-color', 'rgb(22, 119, 255)')
+  await expect(page.locator('.ant-btn-primary').first()).toHaveCSS('background-color', 'rgb(37, 99, 235)')
   await expect(page.locator('.module-card')).toHaveCount(4)
   await page.screenshot({
     path: '../artifacts/screenshots/dashboard-desktop.png',
     fullPage: true,
   })
 
-  const modules = [
-    ['service-desk', '企业IT服务台'],
-  ]
-  for (const [key, title] of modules) {
-    await page.goto(`/modules/${key}`)
-    await expect(page.getByRole('heading', { name: title })).toBeVisible()
-    await expect(page.getByText('Foundation only')).toBeVisible()
-  }
+  await page.goto('/modules/service-desk')
+  await expect(page.getByRole('heading', { name: '企业IT服务台' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /提交工单/ })).toBeVisible()
+  await expect(page.locator('.service-ticket-table')).toBeVisible()
 
   await page.goto('/modules/resume-screening')
-  await expect(page.getByRole('heading', { name: '招聘系统' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '进入学生端' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'AI 简历筛选' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '上传简历' })).toBeVisible()
 
   await page.goto('/modules/asset-management')
   await expect(page.getByRole('heading', { name: '全资产管理' })).toBeVisible()
@@ -118,7 +117,7 @@ test('approval and module failures stay distinct from empty responses and rows s
     return route.fulfill({ status: approvalAttempts === 1 ? 500 : 200, contentType: 'application/json', body: JSON.stringify(payload) })
   })
   await loginAsAdmin(page)
-  await page.route('**/api/v1/modules/service-desk/summary', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: '模块服务暂不可用' }) }))
+  await page.route('**/api/v1/service-desk/overview', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: '模块服务暂不可用' }) }))
   await page.goto('/modules/service-desk')
   await expect(page.getByText('模块服务暂不可用')).toBeVisible()
   await expect(page.getByRole('button', { name: /重\s*试/ })).toBeVisible()
@@ -142,24 +141,35 @@ test('approval and module failures stay distinct from empty responses and rows s
   await expect(page.getByText('标记通知已读失败')).toBeVisible()
 })
 
-test('product demo role is blocked from audit API and menu', async ({ page }) => {
+test('employee role is blocked from audit API and menu', async ({ page }) => {
   await page.goto('/login')
-  await page.getByRole('button', { name: /产品演示用户/ }).click()
+  await page.locator('input[autocomplete="username"]').fill('employee01@demo.local')
+  await page.locator('input[autocomplete="current-password"]').fill('Demo@2026!')
   await page.getByRole('button', { name: /安全进入/ }).click()
   await expect(page).toHaveURL(/dashboard/)
   await expect(page.getByText('审计日志', { exact: true })).toHaveCount(0)
 
   const token = await page.evaluate(() => localStorage.getItem('enterprise_ai_token'))
-  const response = await page.request.get('http://127.0.0.1:8000/api/v1/audit-logs', {
+  const response = await page.request.get('http://127.0.0.1:8001/api/v1/audit-logs', {
     headers: { Authorization: `Bearer ${token}` },
   })
   expect(response.status()).toBe(403)
 })
 
-test('login page only offers platform admin and product demo roles', async ({ page }) => {
+test('login page offers twenty fixed role-based trial accounts', async ({ page }) => {
   await page.goto('/login')
-  await expect(page.locator('.role-option')).toHaveCount(2)
-  await expect(page.getByRole('button', { name: /平台管理员/ })).toBeVisible()
-  await expect(page.getByRole('button', { name: /产品演示用户/ })).toBeVisible()
+  await expect(page.locator('.role-option')).toHaveCount(20)
+  await expect(page.getByRole('button', { name: /admin@demo.local/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /招聘负责人/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /资产管理员A/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /员工一/ })).toBeVisible()
   await expect(page.getByText('审计查看者')).toHaveCount(0)
+})
+
+test('account menu opens on click and logs the current user out', async ({ page }) => {
+  await loginAsAdmin(page)
+  await page.getByRole('button', { name: '账户菜单' }).click()
+  await expect(page.getByText('退出登录', { exact: true })).toBeVisible()
+  await page.getByText('退出登录', { exact: true }).click()
+  await expect(page).toHaveURL(/login/)
 })

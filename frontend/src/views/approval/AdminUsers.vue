@@ -181,7 +181,7 @@ onMounted(loadUsers)
           <a-segmented v-model:value="activeFilter" :options="[{ label: '全部', value: 'all' }, { label: '启用中', value: 'active' }, { label: '已停用', value: 'inactive' }]" aria-label="员工状态筛选" />
         </div>
         <a-empty v-if="filteredUsers.length === 0" description="暂无匹配员工" />
-        <a-table v-else :data-source="filteredUsers" row-key="id" :pagination="false" :scroll="{ x: 760 }">
+        <a-table v-else class="users-table" :data-source="filteredUsers" row-key="id" :pagination="false" :scroll="{ x: 1040 }">
           <a-table-column title="姓名" data-index="display_name" :width="140" />
           <a-table-column title="邮箱" data-index="email" :width="220" />
           <a-table-column title="部门" data-index="department" :width="160" />
@@ -198,6 +198,28 @@ onMounted(loadUsers)
             </a-space>
           </template></a-table-column>
         </a-table>
+        <a-list v-if="filteredUsers.length" class="user-mobile-list" :data-source="filteredUsers">
+          <template #renderItem="{ item }">
+            <a-list-item class="user-mobile-item">
+              <div class="user-mobile-heading">
+                <div><strong>{{ item.display_name }}</strong><small>{{ item.email }}</small></div>
+                <a-tag :color="item.is_active ? 'success' : 'default'">{{ item.is_active ? '启用' : '停用' }}</a-tag>
+              </div>
+              <div class="user-mobile-meta">
+                <span>{{ item.department }}</span>
+                <span>{{ item.position }}</span>
+                <a-tag>{{ roleLabel(item.role) }}</a-tag>
+              </div>
+              <div class="user-mobile-actions">
+                <a-button size="small" @click="openEdit(item)">编辑</a-button>
+                <a-popconfirm v-if="item.is_active" title="停用这名员工？" ok-text="停用" cancel-text="取消" @confirm="setActive(item, false)">
+                  <a-switch :checked="item.is_active" size="small" :aria-label="`停用 ${item.display_name}`" />
+                </a-popconfirm>
+                <a-switch v-else :checked="item.is_active" size="small" :aria-label="`启用 ${item.display_name}`" @change="toggleActive(item, $event)" />
+              </div>
+            </a-list-item>
+          </template>
+        </a-list>
       </template>
     </a-card>
 
@@ -232,6 +254,19 @@ onMounted(loadUsers)
 .users-panel { border: 1px solid #f0f0f0; }
 .users-toolbar { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .users-toolbar .ant-input { max-width: 360px; }
+.user-mobile-list { display: none; }
 .modal-hint { margin-bottom: 16px; }
-@media (max-width: 640px) { .users-toolbar { align-items: stretch; flex-direction: column; } .users-toolbar .ant-input { max-width: none; } }
+@media (max-width: 640px) {
+  .users-toolbar { align-items: stretch; flex-direction: column; }
+  .users-toolbar .ant-input { max-width: none; }
+  .users-table { display: none; }
+  .user-mobile-list { display: block; }
+  .user-mobile-item { display: block !important; padding: 16px 0 !important; }
+  .user-mobile-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .user-mobile-heading > div { display: grid; gap: 3px; min-width: 0; }
+  .user-mobile-heading small { color: #8c8c8c; overflow-wrap: anywhere; }
+  .user-mobile-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 10px; color: #595959; font-size: 13px; }
+  .user-mobile-meta span + span::before { margin-right: 6px; color: #bfbfbf; content: '·'; }
+  .user-mobile-actions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+}
 </style>

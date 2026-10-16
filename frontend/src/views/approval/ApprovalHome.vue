@@ -18,13 +18,10 @@ async function load() {
   loading.value = true
   failed.value = false
   try {
-    const [pendingRes, handledRes] = await Promise.all([
-      api.get('/api/v1/approvals/pending'),
-      api.get('/api/v1/approvals/handled'),
-    ])
-    pendingList.value = (pendingRes.data.data as PendingItem[]).slice(0, 5)
-    pendingCount.value = pendingRes.data.data.length
-    handledCount.value = handledRes.data.data.length
+    const response = await api.get('/api/v1/approvals/overview')
+    pendingList.value = response.data.data.pending_items as PendingItem[]
+    pendingCount.value = response.data.data.pending_count
+    handledCount.value = response.data.data.handled_count
   } catch { failed.value = true }
   finally { loading.value = false }
 }

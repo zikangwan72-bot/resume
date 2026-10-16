@@ -21,8 +21,8 @@ APPROVAL_USERS = [
     },
     {
         "id": "22222222-2222-2222-2222-222222222222",
-        "email": "product@demo.local",
-        "display_name": "产品演示用户",
+        "email": "manager01@demo.local",
+        "display_name": "产品研发经理",
         "department": "产品与流程创新",
         "position": "产品经理",
         "role": "department_manager",
@@ -104,7 +104,7 @@ PURCHASE_FORM_FIELDS = [
     {"key": "supplier", "label": "建议供应商", "type": "text", "required": False},
 ]
 
-# 请假流程第一个节点用产品演示用户(2222...)，确保demo可走通
+# 请假流程第一个节点用产品研发经理(2222...)，确保试用账号可走通
 LEAVE_FLOW_NODES = [
     {
         "index": 0,
@@ -230,8 +230,15 @@ PROCESS_APP_SEEDS = [
 def initialize_approval_db() -> None:
     ApprovalBase.metadata.create_all(bind=approval_engine)
     with ApprovalSessionLocal() as db:
+        approval_user_ids = [user["id"] for user in APPROVAL_USERS]
+        existing_users = {
+            user.id: user
+            for user in db.scalars(
+                select(ApprovalUser).where(ApprovalUser.id.in_(approval_user_ids))
+            ).all()
+        }
         for u in APPROVAL_USERS:
-            existing_user = db.get(ApprovalUser, u["id"])
+            existing_user = existing_users.get(u["id"])
             if existing_user:
                 for key, value in u.items():
                     setattr(existing_user, key, value)
@@ -293,9 +300,12 @@ def initialize_approval_db() -> None:
                 ]
             )
 
+        seed_codes = [seed["code"] for seed in PROCESS_APP_SEEDS]
+        existing_codes = set(
+            db.scalars(select(ProcessApp.code).where(ProcessApp.code.in_(seed_codes))).all()
+        )
         for seed in PROCESS_APP_SEEDS:
-            app = db.scalar(select(ProcessApp).where(ProcessApp.code == seed["code"]))
-            if app:
+            if seed["code"] in existing_codes:
                 continue
 
             app = ProcessApp(

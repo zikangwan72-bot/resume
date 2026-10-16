@@ -52,9 +52,9 @@ async function loginAsAdmin(page: Page) {
     localStorage.removeItem('enterprise_ai_user')
   })
   await page.reload()
-  await page.getByRole('button', { name: /平台管理员/ }).click()
+  await page.getByRole('button', { name: /平台管理员/ }).first().click()
   await page.getByRole('button', { name: /安全进入/ }).click()
-  await expect(page).toHaveURL(/dashboard/)
+  await expect(page).not.toHaveURL(/\/login$/)
 }
 
 async function setupUserApi(page: Page, initialUsers = seededUsers) {
@@ -137,13 +137,32 @@ async function fillUserForm(page: Page, values: { name?: string; email?: string;
   await page.getByRole('textbox', { name: '* 职位' }).fill(values.position || '财务专员')
 }
 
+async function openBlankFormDesigner(page: Page, name: string) {
+  await loginAsAdmin(page)
+  await page.evaluate(async () => {
+    const router = (await import('/src/router/index.ts')).default
+    if (!router.hasRoute('e2e-process-app-new')) {
+      router.addRoute({
+        name: 'e2e-process-app-new',
+        path: '/admin/process-apps/new',
+        component: () => import('/src/views/approval/AdminProcessEditor.vue'),
+      })
+    }
+    await router.push('/admin/process-apps/new')
+  })
+  await page.getByLabel('流程名称').fill(name)
+  const code = page.getByLabel('流程编号')
+  if (await code.isEnabled()) await code.fill(`test-${Date.now()}`)
+  await page.getByRole('button', { name: '下一步' }).click()
+}
+
 test('shows seeded users, filters them, and replaces the legacy role route/menu', async ({ page }) => {
   await setupUserApi(page)
   await loginAsAdmin(page)
   await page.goto('/admin/users')
   await expect(page.getByRole('row', { name: /张三/ })).toBeVisible()
   await expect(page.getByText('角色管理', { exact: true })).toHaveCount(0)
-  await expect(page.getByText('员工与角色', { exact: true })).toBeVisible()
+  await expect(page.getByText('员工管理', { exact: true })).toHaveCount(1)
 
   await page.getByRole('textbox', { name: '搜索员工' }).fill('张三')
   await expect(page.getByRole('row', { name: /张三/ })).toBeVisible()
@@ -221,12 +240,14 @@ test('renders loading, retries errors, and shows one empty state', async ({ page
   await expect(page.getByText('暂无数据')).toHaveCount(0)
 })
 
-test('keeps the users table and modal usable on mobile', async ({ page }) => {
+test('uses a readable user list and keeps the modal usable on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await setupUserApi(page)
   await loginAsAdmin(page)
   await page.goto('/admin/users')
-  await expect(page.getByRole('table')).toBeVisible()
+  await expect(page.locator('.users-table')).not.toBeVisible()
+  await expect(page.locator('.user-mobile-list')).toBeVisible()
+  await expect(page.locator('.user-mobile-item').filter({ hasText: '张三' })).toBeVisible()
   await openCreate(page)
   await expect(page.getByRole('dialog', { name: '新增员工' })).toBeVisible()
   const layout = await page.evaluate(() => ({ viewport: window.innerWidth, scrollWidth: document.documentElement.scrollWidth }))
@@ -238,9 +259,9 @@ test('lists seeded process apps with filters and lifecycle actions', async ({ pa
   await loginAsAdmin(page)
   await page.goto('/admin/process-apps')
   await expect(page.getByRole('heading', { name: '流程应用' })).toBeVisible()
-  await expect(page.getByText('请假申请')).toBeVisible()
-  await expect(page.getByText('报销申请')).toBeVisible()
-  await expect(page.getByText('采购申请')).toBeVisible()
+  await expect(page.locator('.process-apps-table').getByText('请假申请')).toBeVisible()
+  await expect(page.locator('.process-apps-table').getByText('报销申请')).toBeVisible()
+  await expect(page.locator('.process-apps-table').getByText('采购申请')).toBeVisible()
   await expect(page.getByRole('columnheader', { name: '字段数' })).toBeVisible()
   await expect(page.getByRole('table').getByText('已发布', { exact: true }).first()).toBeVisible()
   await expect(page.getByRole('row', { name: /报销申请/ })).toContainText('v1')
@@ -273,17 +294,22 @@ test('lists seeded process apps with filters and lifecycle actions', async ({ pa
 
 test('renders process app loading, retry, empty, and lifecycle API errors', async ({ page }) => {
   let attempts = 0
-  let release: (() => void) | undefined
+  let release!: () => void
+  let markRequestStarted!: () => void
+  const requestGate = new Promise<void>((resolve) => { release = resolve })
+  const requestStarted = new Promise<void>((resolve) => { markRequestStarted = resolve })
   await loginAsAdmin(page)
   await page.route('**/api/v1/admin/process-apps**', async (route) => {
-    await new Promise<void>((resolve) => { release = resolve })
+    markRequestStarted()
+    await requestGate
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: seededProcessApps }) })
   })
   const navigation = page.goto('/admin/process-apps')
+  await requestStarted
   await expect(page.locator('.ant-skeleton')).toBeVisible()
-  release?.()
+  release()
   await navigation
-  await expect(page.getByText('请假申请')).toBeVisible()
+  await expect(page.locator('.process-apps-table').getByText('请假申请')).toBeVisible()
   await page.unroute('**/api/v1/admin/process-apps**')
   await page.route('**/api/v1/admin/process-apps**', async (route) => {
     attempts += 1
@@ -297,12 +323,63 @@ test('renders process app loading, retry, empty, and lifecycle API errors', asyn
   await expect(page.getByText('暂无流程应用')).toBeVisible()
 })
 
-test('keeps the process-app table usable on mobile', async ({ page }) => {
+test('uses readable process-app rows on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await setupProcessAppApi(page)
   await loginAsAdmin(page)
   await page.goto('/admin/process-apps')
-  await expect(page.getByRole('table')).toBeVisible()
+  await expect(page.locator('.process-apps-table')).not.toBeVisible()
+  await expect(page.locator('.process-app-mobile-list')).toBeVisible()
+  const leaveApp = page.locator('.process-app-mobile-item').filter({ hasText: '请假申请' })
+  await expect(leaveApp).toContainText('人事')
+  await expect(leaveApp.getByRole('button', { name: '更多操作' })).toBeVisible()
+})
+
+test('groups launchable process apps by category in a predictable order', async ({ page }) => {
+  const customApp = { ...seededProcessApps[0], id: 8, code: 'legal', name: '合同申请', category: '法务' }
+  await page.route('**/api/v1/approvals/apps', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [customApp, seededProcessApps[1], seededProcessApps[0], seededProcessApps[2]] }) }))
+  await loginAsAdmin(page)
+  await page.goto('/modules/approval-center/new')
+
+  await expect(page.locator('.category-group')).toHaveCount(4)
+  const headings = await page.locator('.category-group h3').allTextContents()
+  expect(headings).toEqual(['人事', '财务', '采购', '法务'])
+  await expect(page.locator('.category-group').filter({ hasText: '人事' }).getByText('请假申请', { exact: true })).toBeVisible()
+  await expect(page.locator('.category-group').filter({ hasText: '财务' }).getByText('报销申请', { exact: true })).toBeVisible()
+  await expect(page.locator('.category-group').filter({ hasText: '法务' }).getByText('合同申请', { exact: true })).toBeVisible()
+})
+
+test('shows approval nodes and approvers after selecting a process app', async ({ page }) => {
+  const app = {
+    ...seededProcessApps[0],
+    flow_schema: {
+      nodes: [
+        { id: 'start', type: 'start', name: '开始' },
+        { id: 'manager', type: 'approval', name: '部门审批', approval_type: 'single', approver_id: 'u-1' },
+        { id: 'finance', type: 'countersign', name: '财务会签', approval_type: 'counter_sign', approver_ids: ['u-1', 'u-2'] },
+        { id: 'end', type: 'end', name: '结束' },
+      ],
+      edges: [
+        { source: 'start', target: 'manager' },
+        { source: 'manager', target: 'finance' },
+        { source: 'finance', target: 'end' },
+      ],
+    },
+  }
+  await page.route('**/api/v1/approvals/apps', async route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [app] }) }))
+  await page.route('**/api/v1/approvals/users', async route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: seededUsers }) }))
+  await loginAsAdmin(page)
+  await page.goto('/modules/approval-center/new')
+  await page.getByText('请假申请', { exact: true }).click()
+
+  await expect(page.getByRole('heading', { name: '审批路径' })).toBeVisible()
+  await expect(page.getByRole('row', { name: /部门审批.*单人审批.*张三/ })).toBeVisible()
+  await expect(page.getByRole('row', { name: /财务会签.*会签.*张三、李四/ })).toBeVisible()
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(page.locator('.approval-path-mobile')).toBeVisible()
+  await expect(page.locator('.approval-path-mobile').getByText('财务会签', { exact: true })).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
 })
 
 test('supports preview and future new/edit routes and reports lifecycle errors', async ({ page }) => {
@@ -334,21 +411,26 @@ test('supports preview and future new/edit routes and reports lifecycle errors',
 test('creates a draft, designs a form, and preserves stable field identifiers', async ({ page }) => {
   await setupProcessAppApi(page)
   let saved = false
+  let createPayload: Record<string, unknown> = {}
+  let createdApp: MockProcessApp | undefined
   await page.route('**/api/v1/admin/process-apps', async (route) => {
     if (route.request().method() !== 'POST') return route.continue()
     saved = true
     const body = route.request().postDataJSON()
-    return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: { ...seededProcessApps[0], ...body, id: 99, version_id: 99, current_version_id: 99, form_schema: body.form_schema } }) })
+    createPayload = body
+    createdApp = { ...seededProcessApps[0], ...body, code: 'HR-20260730-A7K3', id: 99, version_id: 99, current_version_id: 99, form_schema: body.form_schema } as MockProcessApp
+    return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ data: createdApp }) })
   })
+  await page.route('**/api/v1/admin/process-apps/99', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: createdApp }) }))
   await loginAsAdmin(page)
   await page.goto('/admin/process-apps/new')
 
   await page.getByLabel('流程名称').fill('差旅申请')
-  await page.getByLabel('流程编号').fill('travel')
+  await expect(page.getByLabel('流程编号')).toBeDisabled()
   await page.getByRole('button', { name: '下一步' }).click()
   await page.locator('[data-field-type="money"]').click()
   await page.getByLabel('字段名称').fill('预计金额')
-  await expect(page.getByText('预计金额', { exact: true })).toBeVisible()
+  await expect(page.locator('.canvas').getByText('预计金额', { exact: true })).toBeVisible()
 
   const field = page.locator('[data-field-id]').last()
   const firstId = await field.getAttribute('data-field-id')
@@ -364,10 +446,87 @@ test('creates a draft, designs a form, and preserves stable field identifiers', 
   await page.getByRole('button', { name: '上一环节' }).click()
   await expect(page.getByLabel('流程名称')).toHaveValue('差旅申请')
   await page.getByRole('button', { name: '下一步' }).click()
-  await expect(page.getByText('预计金额', { exact: true })).toBeVisible()
+  await expect(page.locator('.canvas').getByText('预计金额', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '保存草稿' }).click()
   await expect(page).toHaveURL('/admin/process-apps/99/edit')
+  await page.getByRole('button', { name: '上一环节' }).click()
+  await expect(page.getByLabel('流程编号')).toHaveValue('HR-20260730-A7K3')
+  expect(createPayload).not.toHaveProperty('code')
   expect(saved).toBeTruthy()
+})
+
+test('field matrix uses real shared controls with local attachments and detail rows', async ({ page }) => {
+  await openBlankFormDesigner(page, '字段矩阵')
+
+  for (const type of ['text', 'textarea', 'number', 'money', 'date', 'date_range', 'radio', 'checkbox', 'select', 'user', 'department', 'attachment', 'section', 'detail_table']) {
+    await page.locator(`[data-field-type="${type}"]`).click()
+  }
+
+  for (const label of ['单行文本', '多行文本', '数字', '金额', '日期', '日期范围', '单选', '多选', '下拉选择', '人员', '部门', '附件']) {
+    await expect(page.locator('.canvas').getByLabel(label, { exact: true })).toBeVisible()
+  }
+
+  const attachment = page.locator('[data-field-id]').filter({ hasText: '附件' }).last()
+  await attachment.locator('input[type="file"]').setInputFiles({ name: '差旅凭证.pdf', mimeType: 'application/pdf', buffer: Buffer.from('preview') })
+  await expect(attachment.getByText('差旅凭证.pdf')).toBeVisible()
+
+  const detail = page.locator('[data-field-id]').last()
+  await detail.getByRole('button', { name: '选择字段' }).click()
+  await page.getByRole('button', { name: '新增明细列' }).click()
+  await page.getByLabel('明细列名称').fill('金额')
+  await page.getByLabel('明细列类型').click()
+  await page.getByText('金额', { exact: true }).last().click()
+  await detail.getByRole('button', { name: '添加明细行' }).click()
+  await expect(page.getByLabel('明细表格 第1行 金额')).toBeVisible()
+
+  await page.getByRole('button', { name: '下一步' }).click()
+  await page.getByRole('button', { name: '下一步' }).click()
+  const applicantPreview = page.locator('.ant-tabs-tabpane-active .runtime-preview')
+  await applicantPreview.locator('input[type="file"]').setInputFiles({ name: '只读凭证.pdf', mimeType: 'application/pdf', buffer: Buffer.from('readonly') })
+  await applicantPreview.getByRole('button', { name: '添加明细行' }).click()
+  await applicantPreview.getByLabel('明细表格 第1行 金额').fill('88')
+  await page.getByRole('tab', { name: '审批人视角' }).click()
+  const approverPreview = page.locator('.ant-tabs-tabpane-active .runtime-preview')
+  await expect(approverPreview.getByText('只读凭证.pdf')).toBeVisible()
+  await expect(approverPreview.getByRole('cell', { name: '88' })).toBeVisible()
+})
+
+test('WYSIWYG form designer updates properties and preserves ordering controls', async ({ page }) => {
+  await openBlankFormDesigner(page, '所见即所得表单')
+
+  await page.locator('[data-field-type="text"]').click()
+  await expect(page.locator('.canvas').getByLabel('单行文本', { exact: true })).toBeVisible()
+  await page.getByLabel('字段名称').fill('出差地点')
+  await expect(page.locator('.canvas').getByLabel('出差地点', { exact: true })).toBeVisible()
+  await page.getByLabel('必填').check()
+  await expect(page.locator('.canvas').getByLabel('出差地点', { exact: true })).toHaveAttribute('aria-required', 'true')
+
+  await page.locator('[data-field-type="select"]').click()
+  await page.getByLabel('字段名称').fill('交通方式')
+  await page.getByRole('textbox', { name: '选项' }).fill('飞机')
+  await page.locator('.canvas').getByLabel('交通方式', { exact: true }).click()
+  await expect(page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option-content', { hasText: '飞机' })).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  const firstId = await page.locator('[data-field-id]').first().getAttribute('data-field-id')
+  const second = page.locator('[data-field-id]').nth(1)
+  await second.getByRole('button', { name: '复制字段' }).click()
+  await expect(page.locator('[data-field-id]')).toHaveCount(3)
+  await page.locator('[data-field-id]').last().getByRole('button', { name: '删除字段' }).click()
+  await second.getByRole('button', { name: '上移字段' }).click()
+  await expect(page.locator('[data-field-id]').first()).not.toHaveAttribute('data-field-id', firstId!)
+  await page.locator('[data-field-id]').first().getByRole('button', { name: '下移字段' }).click()
+  await expect(page.locator('[data-field-id]').first()).toHaveAttribute('data-field-id', firstId!)
+
+  const dragHandle = page.locator('[data-field-id]').first().getByRole('button', { name: '拖动字段' })
+  await dragHandle.dragTo(page.locator('[data-field-id]').last())
+  await expect(page.locator('[data-field-id]').last()).toHaveAttribute('data-field-id', firstId!)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(page.getByLabel('字段组件库')).toBeVisible()
+  await expect(page.getByLabel('字段属性')).toBeVisible()
+  const layout = await page.evaluate(() => ({ viewport: window.innerWidth, scrollWidth: document.documentElement.scrollWidth }))
+  expect(layout.scrollWidth).toBeLessThanOrEqual(layout.viewport)
 })
 
 test('edits an app, configures choices and detail columns, and surfaces save failures', async ({ page }) => {
@@ -383,7 +542,7 @@ test('edits an app, configures choices and detail columns, and surfaces save fai
     if (method === 'PUT') {
       saveFailed = true
       updatePayload = route.request().postDataJSON()
-      return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ detail: '流程编号已存在' }) })
+      return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ detail: '流程草稿已被更新，请刷新后重试' }) })
     }
     return route.continue()
   })
@@ -401,7 +560,7 @@ test('edits an app, configures choices and detail columns, and surfaces save fai
   await page.getByRole('button', { name: '新增明细列' }).click()
   await page.getByLabel('明细列名称').last().fill('金额')
   await page.getByRole('button', { name: '保存草稿' }).click()
-  await expect(page.getByText('流程编号已存在')).toBeVisible()
+  await expect(page.getByText('流程草稿已被更新，请刷新后重试')).toBeVisible()
   expect(saveFailed).toBeTruthy()
   expect(updatePayload.form_schema.fields.find((field: any) => field.id === 'reason')).toMatchObject({ key: 'reason', label: '请假事由' })
   expect(updatePayload.form_schema.fields.find((field: any) => field.type === 'detail_table').columns[0]).toMatchObject({ key: expect.any(String), label: '金额' })
@@ -413,9 +572,9 @@ test('keeps the process editor within the mobile viewport', async ({ page }) => 
   await loginAsAdmin(page)
   await page.goto('/admin/process-apps/new')
   await page.getByLabel('流程名称').fill('移动端流程')
-  await page.getByLabel('流程编号').fill('mobile-flow')
+  await expect(page.getByLabel('流程编号')).toBeDisabled()
   await page.getByRole('button', { name: '下一步' }).click()
-  await expect(page.getByText('申请人信息')).toBeVisible()
+  await expect(page.getByLabel('表单画布').getByText('申请人信息')).toBeVisible()
   await page.screenshot({ path: '../artifacts/task-9-editor-mobile.png', fullPage: true })
   const layout = await page.evaluate(() => ({ viewport: window.innerWidth, scrollWidth: document.documentElement.scrollWidth }))
   expect(layout.scrollWidth).toBeLessThanOrEqual(layout.viewport)
@@ -431,7 +590,7 @@ test('normalizes form options and detail columns before posting every palette fi
   await loginAsAdmin(page)
   await page.goto('/admin/process-apps/new')
   await page.getByLabel('流程名称').fill('完整表单')
-  await page.getByLabel('流程编号').fill('complete-form')
+  await expect(page.getByLabel('流程编号')).toBeDisabled()
   await page.getByRole('button', { name: '下一步' }).click()
   for (const type of ['text', 'textarea', 'number', 'money', 'date', 'date_range', 'radio', 'checkbox', 'select', 'user', 'department', 'attachment', 'section', 'detail_table']) await page.locator(`[data-field-type="${type}"]`).click()
   await expect(page.locator('[data-field-id]')).toHaveCount(14)
@@ -456,7 +615,7 @@ test('blocks duplicate or blank choice options and keeps mobile properties reach
   await loginAsAdmin(page)
   await page.goto('/admin/process-apps/new')
   await page.getByLabel('流程名称').fill('移动配置')
-  await page.getByLabel('流程编号').fill('mobile-config')
+  await expect(page.getByLabel('流程编号')).toBeDisabled()
   await page.getByRole('button', { name: '下一步' }).click()
   await page.locator('[data-field-type="select"]').click()
   await page.getByRole('textbox', { name: '选项' }).fill('   ')
@@ -499,23 +658,26 @@ test('normalizes legacy editor data and persists a successful PUT reload roundtr
   await page.goto('/admin/process-apps/1/edit')
   await expect(page.getByLabel('流程名称')).toHaveValue('旧版流程')
   await page.getByRole('button', { name: '下一步' }).click()
-  await expect(page.getByText('legacy_text', { exact: true })).toBeVisible()
+  await expect(page.locator('.canvas').getByText('legacy_text', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '选择字段 legacy_items' }).click()
   await expect(page.getByLabel('明细列名称')).toHaveValue('kind')
   await page.getByRole('button', { name: '保存草稿' }).click()
   await expect.poll(() => putPayload).toBeTruthy()
-  expect(putPayload).toMatchObject({ name: '旧版流程', code: 'legacy-flow', category: '财务', description: '旧版说明' })
-  expect(putPayload.form_schema.fields[0]).toMatchObject({ id: 'legacy_text', key: 'legacy_text', label: 'legacy_text', placeholder: { legacy: true }, help: null, options: null })
+  expect(putPayload).toMatchObject({ name: '旧版流程', category: '财务', description: '旧版说明' })
+  expect(putPayload).not.toHaveProperty('code')
+  expect(putPayload.form_schema.fields[0]).toMatchObject({ id: 'legacy_text', key: 'legacy_text', label: 'legacy_text' })
+  expect(putPayload.form_schema.fields[0]).not.toHaveProperty('placeholder')
+  expect(putPayload.form_schema.fields[0]).not.toHaveProperty('options')
   expect(putPayload.form_schema.fields[1].columns[0]).toMatchObject({ id: 'kind', key: 'kind', label: 'kind', type: 'select', options: ['server'] })
   await page.reload()
   await expect(page.getByLabel('流程名称')).toHaveValue('旧版流程')
   await page.getByRole('button', { name: '下一步' }).click()
-  await expect(page.getByText('legacy_text', { exact: true })).toBeVisible()
+  await expect(page.locator('.canvas').getByText('legacy_text', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '选择字段 legacy_items' }).click()
   await expect(page.getByLabel('明细列名称')).toHaveValue('kind')
 })
 
-test('designs a serial, countersign, and conditional approval graph then saves its controlled payload', async ({ page }) => {
+test('designs a serial and countersign approval graph without exposing new condition branches', async ({ page }) => {
   let payload: any
   await setupUserApi(page)
   await page.route('**/api/v1/admin/process-apps', async (route) => {
@@ -525,30 +687,27 @@ test('designs a serial, countersign, and conditional approval graph then saves i
   })
   await loginAsAdmin(page)
   await page.goto('/admin/process-apps/new')
-  await page.getByLabel('流程名称').fill('采购条件审批')
-  await page.getByLabel('流程编号').fill('purchase-condition')
+  await page.getByLabel('流程名称').fill('采购审批')
+  await expect(page.getByLabel('流程编号')).toBeDisabled()
   await page.getByRole('button', { name: '下一步' }).click()
   await page.locator('[data-field-type="money"]').click()
   await page.getByLabel('字段名称').fill('预计金额')
   await page.getByRole('button', { name: '下一步' }).click()
 
-  await page.getByRole('button', { name: '单人审批' }).click()
+  await page.getByRole('button', { name: '在 开始 后添加节点' }).click()
+  await expect(page.locator('.ant-dropdown:not(.ant-dropdown-hidden)').getByRole('menuitem', { name: '条件分支' })).toHaveCount(0)
+  await page.locator('.ant-dropdown:not(.ant-dropdown-hidden)').getByRole('menuitem', { name: '单人审批' }).click()
   await page.getByLabel('节点名称').fill('部门审批')
-  await page.getByLabel('审批人').click()
+  await page.getByLabel('审批人', { exact: true }).click()
   await page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').getByText('张三 | 产品研发部 | 产品经理', { exact: true }).click()
   await page.getByRole('button', { name: '应用节点配置' }).click()
-  await page.getByRole('button', { name: '条件分支' }).click()
-  await page.getByLabel('条件字段').selectOption({ label: '预计金额' })
-  await page.getByLabel('比较方式').selectOption('gt')
-  await page.getByLabel('比较值').fill('100000')
-  await page.getByRole('button', { name: '应用节点配置' }).click()
-  await page.getByRole('button', { name: '会签' }).click()
+  await page.getByRole('button', { name: '在 部门审批 后添加节点' }).click()
+  await page.locator('.ant-dropdown:not(.ant-dropdown-hidden)').getByRole('menuitem', { name: '会签' }).click()
   await page.getByLabel('节点名称').fill('财务会签')
-  await page.getByLabel('审批人').click()
+  await page.getByLabel('审批人', { exact: true }).click()
   await page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').getByText('张三 | 产品研发部 | 产品经理', { exact: true }).click()
   await page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)').getByText('李四 | 财务管理部 | 财务专员', { exact: true }).click()
   await page.getByRole('button', { name: '应用节点配置' }).click()
-  await expect(page.getByText('默认分支', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '保存草稿' }).click()
   await expect(page).toHaveURL('/admin/process-apps/110/edit')
   expect(payload.flow_schema.nodes).toEqual(expect.arrayContaining([
@@ -556,12 +715,8 @@ test('designs a serial, countersign, and conditional approval graph then saves i
     expect.objectContaining({ type: 'end' }),
     expect.objectContaining({ type: 'approval', approval_type: 'single', approver_id: 'u-1', allow_transfer: false }),
     expect.objectContaining({ type: 'countersign', approval_type: 'counter_sign', approver_ids: ['u-1', 'u-2'] }),
-    expect.objectContaining({ type: 'condition' }),
   ]))
-  expect(payload.flow_schema.edges).toEqual(expect.arrayContaining([
-    expect.objectContaining({ default: true }),
-    expect.objectContaining({ condition: { field_id: expect.any(String), operator: 'gt', value: 100000 } }),
-  ]))
+  expect(payload.flow_schema.nodes.some((node: any) => node.type === 'condition')).toBe(false)
 })
 
 test('surfaces publish validation errors on their flow target and publishes a saved draft', async ({ page }) => {
@@ -595,7 +750,7 @@ test('surfaces publish validation errors on their flow target and publishes a sa
   await page.getByRole('button', { name: '下一步' }).click()
   await page.getByRole('button', { name: '下一步' }).click()
   await page.getByRole('button', { name: '发布流程' }).click()
-  await expect(page.getByText('审批人必须是启用员工')).toBeVisible()
+  await expect(page.getByRole('alert').getByText('审批人必须是启用员工')).toBeVisible()
   await expect(page.getByRole('heading', { name: '流程设计' })).toBeVisible()
   await expect(page.locator('[data-flow-node-id="approval"]')).toBeFocused()
   await page.getByRole('button', { name: '下一步' }).click()
@@ -617,8 +772,8 @@ test('shows local flow validation for a missing approver', async ({ page }) => {
   await page.goto('/admin/process-apps/130/edit')
   await page.getByRole('button', { name: '下一步' }).click()
   await page.getByRole('button', { name: '下一步' }).click()
-  await expect(page.getByText('审批人必须是启用员工')).toBeVisible()
-  await page.getByText('审批人必须是启用员工').click()
+  await expect(page.getByRole('alert').getByText('审批人必须是启用员工')).toBeVisible()
+  await page.locator('.definition-alert').filter({ hasText: '审批人必须是启用员工' }).click()
   await expect(page.locator('[data-flow-node-id="approval"]')).toBeFocused()
 })
 
@@ -640,8 +795,8 @@ test('reorders and deletes a serial approval node without breaking the saved gra
   await page.getByRole('button', { name: '下一步' }).click()
   await page.getByRole('button', { name: '下一步' }).click()
   await page.locator('[data-flow-node-id="second"]').click()
-  await page.getByLabel('上移节点').click()
-  await page.getByLabel('删除节点').click()
+  await page.getByLabel('上移 第二审批').click()
+  await page.getByLabel('删除 第二审批').click()
   await page.getByRole('button', { name: '保存草稿' }).click()
   await expect.poll(() => payload).toBeTruthy()
   expect(payload.flow_schema.nodes.map((node: any) => node.id)).toEqual(expect.arrayContaining(['start', 'first', 'end']))
@@ -655,7 +810,8 @@ test('Task10 default branch insertion exposes deep nodes and keyboard edit', asy
   await page.route('**/api/v1/admin/process-apps/150', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: app }) }))
   await loginAsAdmin(page); await page.goto('/admin/process-apps/150/edit'); await page.getByRole('button', { name: '下一步' }).click(); await page.getByRole('button', { name: '下一步' }).click()
   await expect(page.locator('[data-flow-node-id="deep"]')).toBeVisible()
-  await page.getByLabel('在此分支添加节点 默认分支').click()
+  await page.getByLabel('在 默认深层审批 后添加节点').click()
+  await page.locator('.ant-dropdown:not(.ant-dropdown-hidden)').getByRole('menuitem', { name: '单人审批' }).click()
   await expect(page.getByLabel('节点名称')).toBeVisible()
   await page.keyboard.press('Escape')
   await page.getByLabel('编辑 默认深层审批').press('Enter')
@@ -667,10 +823,10 @@ test('Task10 reports a local cycle and canonicalizes legacy countersign editing'
   await setupUserApi(page)
   await page.route('**/api/v1/admin/process-apps/151', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: app }) }))
   await loginAsAdmin(page); await page.goto('/admin/process-apps/151/edit'); await page.getByRole('button', { name: '下一步' }).click(); await page.getByRole('button', { name: '下一步' }).click()
-  await expect(page.getByText('流程图不能包含环路')).toBeVisible()
+  await expect(page.getByRole('alert').getByText('流程顺序不能循环')).toBeVisible()
   await page.getByLabel('编辑 历史会签').click()
-  await expect(page.getByLabel('审批人')).toHaveCount(1)
-  await expect(page.getByLabel('审批人')).toHaveClass(/ant-select-multiple/)
+  await expect(page.getByLabel('审批人', { exact: true })).toHaveCount(1)
+  await expect(page.getByLabel('审批人', { exact: true })).toHaveClass(/ant-select-multiple/)
 })
 
 test('Task11 submits a high-value purchase with a stable idempotency key', async ({ page }) => {
@@ -720,10 +876,43 @@ test('Task11 renders request snapshots and surfaces action errors on mobile', as
   await loginAsAdmin(page)
   await page.goto('/modules/approval-center/88')
   await expect(page.getByText('流程版本')).toBeVisible()
-  await expect(page.getByText('产品研发部')).toBeVisible()
+  await expect(page.locator('.ant-descriptions').first().getByText('产品研发部')).toBeVisible()
   await expect(page.getByText('李四')).toBeVisible()
-  await page.getByRole('button', { name: '同意' }).click()
+  await page.getByRole('button', { name: '同意并提交' }).click()
   await expect(page.getByText('审批失败')).toBeVisible()
+})
+
+test('does not report a successful request detail load as failed', async ({ page }) => {
+  const detail: any = {
+    id: 188, process_app_id: 1, process_version_id: 11,
+    applicant_id: '11111111-1111-1111-1111-111111111111', applicant_name: '平台管理员',
+    applicant_snapshot: { display_name: '平台管理员', email: 'admin@demo.local', department: '企业数字化中心', position: '平台管理员' },
+    title: '正常审批申请', form_data: {}, form_schema_snapshot: { fields: [] }, status: 'approved', current_node_index: 0,
+    flow_snapshot: [{ id: 'manager', index: 0, type: 'approval', name: '经理审批' }], nodes: [], actions: [],
+    created_at: '2026-07-31T09:00:00Z', updated_at: '2026-07-31T09:00:00Z', submitted_at: '2026-07-31T09:00:00Z', completed_at: '2026-07-31T09:10:00Z',
+  }
+  await page.route('**/api/v1/approvals/requests/188', async route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: detail }) }))
+  await page.route('**/api/v1/approvals/users', async route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: seededUsers }) }))
+  await loginAsAdmin(page)
+  await page.goto('/modules/approval-center/188')
+  await expect(page.getByRole('heading', { name: '正常审批申请' })).toBeVisible()
+  await page.waitForTimeout(100)
+  expect(await page.locator('.ant-message-notice-content').filter({ hasText: '申请加载失败' }).count()).toBe(0)
+})
+
+test('shows a retryable error state when request detail loading really fails', async ({ page }) => {
+  let attempts = 0
+  await page.route('**/api/v1/approvals/requests/189', async route => {
+    attempts += 1
+    return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: '审批服务暂时不可用' }) })
+  })
+  await page.route('**/api/v1/approvals/users', async route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: seededUsers }) }))
+  await loginAsAdmin(page)
+  await page.goto('/modules/approval-center/189')
+  await expect(page.getByRole('heading', { name: '申请加载失败' })).toBeVisible()
+  await expect(page.getByText('审批服务暂时不可用')).toBeVisible()
+  await page.getByRole('button', { name: '重新加载' }).click()
+  await expect.poll(() => attempts).toBe(2)
 })
 
 test('Task11 shows PUT urge only to the pending applicant', async ({ page }) => {
@@ -740,4 +929,50 @@ test('Task11 shows PUT urge only to the pending applicant', async ({ page }) => 
   detail.applicant_id = 'u-1'
   await page.reload()
   await expect(page.getByRole('button', { name: '催办' })).toHaveCount(0)
+})
+
+test('lets the return target revise the form and resume the original approval node', async ({ page }) => {
+  const detail: any = {
+    id: 90,
+    process_app_id: 1,
+    process_version_id: 11,
+    applicant_id: 'u-applicant',
+    applicant_name: '申请人',
+    applicant_snapshot: { display_name: '申请人', email: 'applicant@example.com', department: '产品部', position: '产品经理' },
+    title: '差旅申请',
+    form_data: { destination: '上海' },
+    form_schema_snapshot: { fields: [{ id: 'destination', key: 'destination', label: '出差地点', type: 'text', required: true }] },
+    status: 'revision',
+    current_node_index: 1,
+    flow_snapshot: [{ id: 'manager', index: 0, type: 'approval', name: '直属经理' }, { id: 'finance', index: 1, type: 'approval', name: '财务审批' }],
+    nodes: [{ id: 20, node_index: 1, node_key: 'finance', approver_id: 'u-finance', approver_name: '财务审批人', status: 'returned', comment: '补充目的地', acted_at: '2026-07-30T09:00:00Z' }],
+    actions: [{ id: 2, node_id: 20, actor_id: 'u-finance', actor_name: '财务审批人', action: 'return', comment: '补充目的地', created_at: '2026-07-30T09:00:00Z' }],
+    return_context: { source_node_id: 20, source_node_index: 1, target_user_id: '11111111-1111-1111-1111-111111111111', target_user_name: '平台管理员', reason: '补充目的地', returned_at: '2026-07-30T09:00:00Z' },
+    created_at: '2026-07-30T08:00:00Z',
+    updated_at: '2026-07-30T09:00:00Z',
+    submitted_at: '2026-07-30T08:00:00Z',
+    completed_at: null,
+  }
+  let resubmitPayload: any
+  await page.route('**/api/v1/approvals/requests/90', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: detail }) }))
+  await page.route('**/api/v1/approvals/users', async (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: seededUsers }) }))
+  await page.route('**/api/v1/approvals/requests/90/resubmit', async (route) => {
+    resubmitPayload = route.request().postDataJSON()
+    detail.status = 'pending'
+    detail.form_data = resubmitPayload.form_data
+    detail.return_context = null
+    detail.nodes = [{ ...detail.nodes[0], status: 'pending' }]
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: detail }) })
+  })
+
+  await loginAsAdmin(page)
+  await page.goto('/modules/approval-center/90')
+  await expect(page.getByText('退回原因：补充目的地')).toBeVisible()
+  await page.getByLabel('出差地点').fill('深圳')
+  await page.getByLabel('返工说明').fill('已补充准确目的地')
+  await page.getByRole('button', { name: '修改后重新提交' }).click()
+
+  await expect.poll(() => resubmitPayload).toEqual({ form_data: { destination: '深圳' }, comment: '已补充准确目的地' })
+  await expect(page.getByText('待修改', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.node-row').getByText('财务审批人', { exact: true })).toBeVisible()
 })

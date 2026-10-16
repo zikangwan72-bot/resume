@@ -5,6 +5,12 @@ from pathlib import Path
 os.environ["DATABASE_URL"] = "sqlite:///./test_enterprise_ai.db"
 os.environ["APPROVAL_DATABASE_URL"] = "sqlite:///./test_approval.db"
 os.environ["JWT_SECRET"] = "test-secret"
+os.environ["SUPABASE_URL"] = ""
+os.environ["SUPABASE_ANON_KEY"] = ""
+os.environ["SUPABASE_SERVICE_ROLE_KEY"] = ""
+os.environ["OPENAI_API_KEY"] = ""
+os.environ["OPENAI_MODEL"] = ""
+os.environ["DEEPSEEK_API_KEY"] = ""
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

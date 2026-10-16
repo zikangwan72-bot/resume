@@ -4,10 +4,11 @@ from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case, desc, exists, func, select
+from sqlalchemy import Interval, case, desc, exists, func, literal_column, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.approval.codegen import generate_process_code
 from app.approval.database import get_approval_db
 from app.approval.engine import validate_process_definition
 from app.approval.models import (
@@ -62,6 +63,17 @@ def _editable_version(db: Session, app: ProcessApp) -> ProcessVersion:
     if versions:
         return versions[0]
     raise HTTPException(status_code=500, detail="流程版本数据异常")
+
+
+def _draft_version(db: Session, app: ProcessApp) -> ProcessVersion | None:
+    return next(
+        (
+            version
+            for version in _versions_for_app(db, app.id)
+            if version.status == "draft"
+        ),
+        None,
+    )
 
 
 def _current_published_version(db: Session, app: ProcessApp) -> ProcessVersion | None:
@@ -282,13 +294,24 @@ def _current_node_exists(condition) -> object:
     )
 
 
-def _overdue_node_exists() -> object:
-    return _current_node_exists(
-        ApprovalNode.timeout_hours > 0,
-    ).where(
+def _overdue_condition(dialect_name: str) -> object:
+    if dialect_name == "postgresql":
+        one_hour = literal_column("INTERVAL '1 hour'", type_=Interval())
+        return (
+            ApprovalNode.created_at + ApprovalNode.timeout_hours * one_hour
+            < func.current_timestamp()
+        )
+    return (
         func.julianday(func.current_timestamp()) - func.julianday(ApprovalNode.created_at)
         > ApprovalNode.timeout_hours / 24.0
     )
+
+
+def _overdue_node_exists(db: Session) -> object:
+    dialect_name = db.get_bind().dialect.name
+    return _current_node_exists(
+        ApprovalNode.timeout_hours > 0,
+    ).where(_overdue_condition(dialect_name))
 
 
 def _monitor_requests(
@@ -334,9 +357,9 @@ def _monitor_requests(
             _current_node_exists(ApprovalNode.approver_id == current_approver_id)
         )
     if overdue is True:
-        statement = statement.where(_overdue_node_exists())
+        statement = statement.where(_overdue_node_exists(db))
     elif overdue is False:
-        statement = statement.where(~_overdue_node_exists())
+        statement = statement.where(~_overdue_node_exists(db))
     total = db.scalar(
         select(func.count()).select_from(statement.order_by(None).subquery())
     ) or 0
@@ -349,7 +372,7 @@ def process_monitor_summary(
     _: User = Depends(require_permission("approval:manage")),
     db: Session = Depends(get_approval_db),
 ) -> dict:
-    overdue_node = _overdue_node_exists()
+    overdue_node = _overdue_node_exists(db)
     counts = db.execute(
         select(
             func.count(ApprovalRequest.id),
@@ -429,13 +452,33 @@ def list_process_apps(
     db: Session = Depends(get_approval_db),
 ) -> dict:
     apps = db.scalars(select(ProcessApp).order_by(desc(ProcessApp.updated_at))).all()
+    app_ids = [app.id for app in apps]
+    versions_by_app: dict[int, list[ProcessVersion]] = {app_id: [] for app_id in app_ids}
+    if app_ids:
+        versions = db.scalars(
+            select(ProcessVersion)
+            .where(ProcessVersion.process_app_id.in_(app_ids))
+            .order_by(ProcessVersion.process_app_id, desc(ProcessVersion.version_number))
+        ).all()
+        for version in versions:
+            versions_by_app[version.process_app_id].append(version)
+
+    def version_pair(app: ProcessApp) -> tuple[ProcessVersion | None, ProcessVersion | None]:
+        versions = versions_by_app[app.id]
+        current = next(
+            (
+                version
+                for version in versions
+                if version.id == app.current_version_id and version.status == "published"
+            ),
+            None,
+        ) or next((version for version in versions if version.status == "published"), None)
+        draft = next((version for version in versions if version.status == "draft"), None)
+        return current, draft
+
     return {
         "data": [
-            serialize_process_app_list(
-                app,
-                _current_published_version(db, app),
-                _editable_version(db, app),
-            )
+            serialize_process_app_list(app, *version_pair(app))
             for app in apps
         ]
     }
@@ -447,10 +490,8 @@ def create_process_app(
     _: User = Depends(require_permission("approval:manage")),
     db: Session = Depends(get_approval_db),
 ) -> dict:
-    if db.scalar(select(ProcessApp.id).where(ProcessApp.code == body.code)) is not None:
-        raise HTTPException(status_code=409, detail="流程编号已存在")
     app = ProcessApp(
-        code=body.code,
+        code=generate_process_code(db, body.category),
         name=body.name,
         category=body.category,
         description=body.description,
@@ -493,11 +534,7 @@ def update_process_app(
 ) -> dict:
     app = _get_app(db, app_id)
     if body.code is not None and body.code != app.code:
-        if app.status == "published":
-            raise HTTPException(status_code=400, detail="已发布流程的编号不可修改")
-        if db.scalar(select(ProcessApp.id).where(ProcessApp.code == body.code)) is not None:
-            raise HTTPException(status_code=409, detail="流程编号已存在")
-        app.code = body.code
+        raise HTTPException(status_code=400, detail="已生成的流程编号不可修改")
 
     editable_version = _editable_version(db, app)
     if editable_version.status == "published":

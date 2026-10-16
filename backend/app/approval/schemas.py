@@ -79,7 +79,6 @@ class FlowEdgeDefinition(TypedDict):
 
 
 class ProcessAppCreate(BaseModel):
-    code: Annotated[str, Field(min_length=1, max_length=80)]
     name: Annotated[str, Field(min_length=1, max_length=120)]
     category: Annotated[str, Field(min_length=1, max_length=80)] = "通用审批"
     description: str | None = None

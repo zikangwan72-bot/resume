@@ -3,15 +3,20 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { message } from 'ant-design-vue'
 import api from '@/api/client'
+import ApprovalActionBar from '@/components/approval/ApprovalActionBar.vue'
+import DynamicApprovalForm from '@/components/approval/DynamicApprovalForm.vue'
 import FormSchemaDesigner from '@/components/approval/FormSchemaDesigner.vue'
 import FlowSchemaDesigner from '@/components/approval/FlowSchemaDesigner.vue'
+import { useAuthStore } from '@/stores/auth'
 import type { ApiEnvelope, ApprovalUser, FlowValidationIssue, ProcessApp, ProcessAppDraft } from '@/types/approval'
 
-const route = useRoute(); const router = useRouter(); const formRef = ref()
+const route = useRoute(); const router = useRouter(); const auth = useAuthStore(); const formRef = ref()
 const step = ref(0); const loading = ref(false); const saving = ref(false); const loaded = ref(false); const baseline = ref('')
+const previewRole = ref<'applicant' | 'approver'>('applicant'); const previewValues = ref<Record<string, any>>({})
 const users = ref<ApprovalUser[]>([]); const flowIssues = ref<FlowValidationIssue[]>([]); const publishIssues = ref<FlowValidationIssue[]>([])
 const flowDesigner = ref<{ focusTarget: (id?: string) => void } | null>(null)
-const draft = reactive<ProcessAppDraft>({ code: '', name: '', category: '通用审批', description: '', form_schema: { fields: [] }, flow_schema: { nodes: [], edges: [] } })
+const categoryOptions = ['人事', '财务', '采购', '行政', '通用'].map((value) => ({ value }))
+const draft = reactive<ProcessAppDraft>({ code: '', name: '', category: '通用', description: '', form_schema: { fields: [] }, flow_schema: { nodes: [], edges: [] } })
 const isEdit = computed(() => typeof route.params.id === 'string')
 const visibleFlowIssues = computed(() => {
   const errors = new Map<string, { issue: FlowValidationIssue; type: 'warning' | 'error' }>()
@@ -20,12 +25,12 @@ const visibleFlowIssues = computed(() => {
   publishIssues.value.forEach((issue) => errors.set(keyFor(issue), { issue, type: 'error' }))
   return [...errors.values()]
 })
-const formRules = { name: [{ required: true, whitespace: true, message: '请输入流程名称', trigger: 'blur' }], code: [{ required: true, whitespace: true, message: '请输入流程编号', trigger: 'blur' }, { pattern: /^[A-Za-z][A-Za-z0-9_-]*$/, message: '编号须以字母开头，只能使用字母、数字、下划线或连字符', trigger: 'blur' }], category: [{ required: true, message: '请选择流程分类', trigger: 'change' }] }
+const formRules = { name: [{ required: true, whitespace: true, message: '请输入流程名称', trigger: 'blur' }], category: [{ required: true, whitespace: true, message: '请选择或输入流程分类', trigger: ['change', 'blur'] }] }
 const snapshot = () => JSON.stringify(draft)
 const dirty = computed(() => loaded.value && snapshot() !== baseline.value)
 function nonemptyString(value: unknown) { return typeof value === 'string' && value.trim() ? value.trim() : undefined }
-function normalizeOptionalText(value: unknown) { return typeof value === 'string' ? value.trim() : value }
-function normalizedOptions(options: unknown) { return Array.isArray(options) ? options.map((option) => typeof option === 'string' ? option.trim() : option) : options }
+function normalizeOptionalText(value: unknown) { return typeof value === 'string' ? value.trim() : undefined }
+function normalizedOptions(options: unknown) { return Array.isArray(options) ? options.map((option) => typeof option === 'string' ? option.trim() : option) : undefined }
 function normalizeFields(fields: unknown): ProcessAppDraft['form_schema']['fields'] {
   const fieldIds = new Set<string>()
   const legacyFields = Array.isArray(fields) ? fields as Array<Record<string, unknown>> : []
@@ -36,7 +41,7 @@ function normalizeFields(fields: unknown): ProcessAppDraft['form_schema']['field
     const columnIds = new Set<string>()
     const legacyColumns = Array.isArray(field.columns) ? field.columns as Array<Record<string, unknown>> : undefined
     const columns = legacyColumns?.map((column) => {
-      let columnId = nonemptyString(column.id) ?? nonemptyString(column.key)
+      let columnId = nonemptyString(column.key) ?? nonemptyString(column.id)
       if (!columnId || columnIds.has(columnId)) columnId = crypto.randomUUID()
       columnIds.add(columnId)
       return {
@@ -105,7 +110,7 @@ async function save(): Promise<ProcessApp | null> {
   try { await formRef.value?.validate() } catch { step.value = 0; return null }
   if (!validateSchema()) return null
   saving.value = true
-  const payload = { code: draft.code.trim(), name: draft.name.trim(), category: draft.category, description: draft.description || null, form_schema: draft.form_schema, flow_schema: draft.flow_schema }
+  const payload = { name: draft.name.trim(), category: draft.category.trim(), description: draft.description || null, form_schema: draft.form_schema, flow_schema: draft.flow_schema }
   try {
     const response = isEdit.value ? await api.put<ApiEnvelope<ProcessApp>>(`/api/v1/admin/process-apps/${draft.id}`, payload) : await api.post<ApiEnvelope<ProcessApp>>('/api/v1/admin/process-apps', payload)
     apply(response.data.data); baseline.value = snapshot(); message.success('草稿已保存')
@@ -152,10 +157,10 @@ watch(() => route.params.id, () => { void load() })
         </a-steps>
         <div v-show="step === 0" class="stage basic-stage">
           <a-form ref="formRef" :model="draft" :rules="formRules" layout="vertical" class="basic-form">
-            <a-form-item label="流程名称" name="name"><a-input v-model:value="draft.name" aria-label="流程名称" maxlength="120" /></a-form-item>
-            <a-form-item label="流程编号" name="code"><a-input v-model:value="draft.code" aria-label="流程编号" maxlength="80" /></a-form-item>
-            <a-form-item label="流程分类" name="category"><a-select v-model:value="draft.category" aria-label="流程分类" :options="['通用审批', '行政', '财务', '采购', '人事'].map((value) => ({ value }))" /></a-form-item>
-            <a-form-item label="流程说明"><a-textarea v-model:value="draft.description" aria-label="流程说明" :rows="4" maxlength="500" /></a-form-item>
+            <a-form-item label="流程名称" name="name"><a-input v-model:value="draft.name" aria-label="流程名称" :maxlength="120" /></a-form-item>
+            <a-form-item label="流程编号"><a-input :value="draft.code" aria-label="流程编号" disabled placeholder="保存后自动生成" /></a-form-item>
+            <a-form-item label="流程分类" name="category"><a-auto-complete v-model:value="draft.category" aria-label="流程分类" :options="categoryOptions" placeholder="选择预设分类或直接输入" /></a-form-item>
+            <a-form-item label="流程说明"><a-textarea v-model:value="draft.description" aria-label="流程说明" :rows="4" :maxlength="500" /></a-form-item>
           </a-form>
         </div>
         <div v-show="step === 1" class="stage"><FormSchemaDesigner v-model="draft.form_schema" /></div>
@@ -164,12 +169,17 @@ watch(() => route.params.id, () => { void load() })
           <FlowSchemaDesigner ref="flowDesigner" v-model="draft.flow_schema" :users="users" :fields="draft.form_schema.fields" @validationChange="flowIssues = $event" />
         </div>
         <div v-show="step === 3" class="stage preview-stage">
-          <div class="preview-heading"><div><h2>预览发布</h2><p>确认应用元信息、表单字段与审批流后发布新版本。</p></div><a-tag :color="flowIssues.length ? 'warning' : 'success'">{{ flowIssues.length ? `${flowIssues.length} 项流程校验提示` : '流程校验通过' }}</a-tag></div>
-          <div class="preview-grid">
-            <section><h3>基本信息</h3><dl><dt>名称</dt><dd>{{ draft.name || '未命名流程' }}</dd><dt>编号</dt><dd>{{ draft.code || '未设置' }}</dd><dt>分类</dt><dd>{{ draft.category }}</dd></dl></section>
-            <section><h3>表单字段</h3><p v-if="!draft.form_schema.fields.length" class="muted">尚未配置业务字段</p><ul v-else><li v-for="field in draft.form_schema.fields" :key="field.id">{{ field.label || field.id }} <span>{{ field.type }}</span></li></ul></section>
-            <section><h3>审批流</h3><p>{{ draft.flow_schema.nodes.filter((node) => node.type === 'approval' || node.type === 'countersign').length }} 个审批节点，{{ draft.flow_schema.nodes.filter((node) => node.type === 'condition').length }} 个条件分支</p><a-button @click="step = 2">查看流程设计</a-button></section>
-          </div>
+          <div class="preview-heading"><div><h2>{{ draft.name || '未命名流程' }}</h2><p>{{ draft.category }} · {{ draft.code || '保存草稿后自动生成编号' }}</p></div><a-tag :color="flowIssues.length ? 'warning' : 'success'">{{ flowIssues.length ? `${flowIssues.length} 项流程校验提示` : '流程校验通过' }}</a-tag></div>
+          <a-alert v-if="visibleFlowIssues.length" type="warning" show-icon><template #message>发布前需要处理 {{ visibleFlowIssues.length }} 项问题</template><template #description><button v-for="entry in visibleFlowIssues" :key="`${entry.issue.code}-${entry.issue.target_id}`" type="button" class="issue-link" @click="focusDefinitionIssue(entry.issue)">{{ entry.issue.message }}</button></template></a-alert>
+          <a-tabs v-model:active-key="previewRole" class="preview-tabs">
+            <a-tab-pane key="applicant" tab="发起人视角">
+              <section class="runtime-preview"><DynamicApprovalForm v-model="previewValues" :schema="draft.form_schema" :applicant="auth.user" /><div class="preview-submit"><a-button disabled>保存草稿</a-button><a-button type="primary" disabled>提交申请</a-button></div></section>
+            </a-tab-pane>
+            <a-tab-pane key="approver" tab="审批人视角">
+              <section class="runtime-preview"><DynamicApprovalForm v-model="previewValues" :schema="draft.form_schema" :applicant="auth.user" readonly /><div class="preview-action-panel"><h3>审批操作</h3><ApprovalActionBar preview can-transfer :users="users" /></div></section>
+            </a-tab-pane>
+          </a-tabs>
+          <div class="flow-preview-summary"><span>{{ draft.flow_schema.nodes.filter((node) => node.type === 'approval' || node.type === 'countersign').length }} 个审批节点</span><span>{{ draft.flow_schema.nodes.filter((node) => node.type === 'condition').length }} 个条件分支</span><a-button @click="step = 2">查看流程设计</a-button></div>
         </div>
         <footer class="editor-footer"><a-button v-if="step > 0" @click="previous">上一环节</a-button><span class="footer-fill" /><a-button :loading="saving" aria-label="保存草稿" @click="save">保存草稿</a-button><a-button v-if="step < 3" type="primary" @click="next">下一步</a-button><a-button v-else type="primary" :loading="saving" @click="publish">发布流程</a-button></footer>
       </section>
@@ -178,6 +188,6 @@ watch(() => route.params.id, () => { void load() })
 </template>
 
 <style scoped>
-.editor-page { max-width: 1440px; } .editor-shell { display: grid; gap: 20px; padding: 20px; background: #fff; } .stage { min-width: 0; } .basic-stage { max-width: 720px; } .basic-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; } .basic-form :deep(.ant-form-item:last-child) { grid-column: 1 / -1; } .flow-stage { display: grid; gap: 12px; } .definition-alert { cursor: pointer; } .preview-stage { display: grid; gap: 16px; } .preview-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-bottom: 1px solid #e7ebf1; padding-bottom: 12px; } .preview-heading h2, .preview-grid h3 { margin: 0; } .preview-heading p, .muted { margin: 4px 0 0; color: #687386; } .preview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; } .preview-grid section { min-width: 0; padding-right: 16px; border-right: 1px solid #edf0f4; } .preview-grid section:last-child { border-right: 0; } dl { display: grid; grid-template-columns: 64px 1fr; gap: 8px; margin: 14px 0 0; } dt, .preview-grid li span { color: #687386; } dd { margin: 0; overflow-wrap: anywhere; } .preview-grid ul { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; } .preview-grid li { display: flex; justify-content: space-between; gap: 8px; } .editor-footer { display: flex; align-items: center; gap: 8px; padding-top: 4px; border-top: 1px solid #f0f0f0; } .footer-fill { flex: 1; }
-@media (max-width: 760px) { .editor-page { padding: 0; } .editor-shell { padding: 14px; } .basic-form, .preview-grid { grid-template-columns: 1fr; } .preview-grid section { padding: 0 0 14px; border-right: 0; border-bottom: 1px solid #edf0f4; } .preview-grid section:last-child { border-bottom: 0; } .preview-heading .ant-tag { display: none; } .editor-footer { position: static; padding: 14px 0 0; background: #fff; flex-wrap: wrap; } }
+.editor-page { max-width: 1440px; } .editor-shell { display: grid; gap: 20px; padding: 20px; background: #fff; } .stage { min-width: 0; } .basic-stage { max-width: 720px; } .basic-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; } .basic-form :deep(.ant-form-item:last-child) { grid-column: 1 / -1; } .flow-stage { display: grid; gap: 12px; } .definition-alert { cursor: pointer; } .preview-stage { display: grid; gap: 16px; max-width:980px; } .preview-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-bottom: 1px solid #e7ebf1; padding-bottom: 12px; } .preview-heading h2, .preview-action-panel h3 { margin: 0; } .preview-heading p, .muted { margin: 4px 0 0; color: #687386; } .issue-link { display:block; width:100%; padding:3px 0; border:0; color:#8a5a00; background:transparent; text-align:left; cursor:pointer; } .runtime-preview { display:grid; gap:20px; padding:18px; border:1px solid #e4e9ef; background:#fff; } .preview-submit { display:flex; justify-content:flex-end; gap:8px; padding-top:12px; border-top:1px solid #edf0f4; } .preview-action-panel { display:grid; gap:12px; padding-top:16px; border-top:2px solid #147d89; } .flow-preview-summary { display:flex; align-items:center; gap:12px; padding:12px 0; border-top:1px solid #edf0f4; color:#687386; } .flow-preview-summary .ant-btn { margin-left:auto; } .editor-footer { display: flex; align-items: center; gap: 8px; padding-top: 4px; border-top: 1px solid #f0f0f0; } .footer-fill { flex: 1; }
+@media (max-width: 760px) { .editor-page { padding: 0; } .editor-shell { padding: 14px; } .basic-form { grid-template-columns: 1fr; } .preview-heading .ant-tag { display: none; } .runtime-preview { padding:12px; } .flow-preview-summary { align-items:flex-start; flex-wrap:wrap; } .flow-preview-summary .ant-btn { margin-left:0; } .editor-footer { position: static; padding: 14px 0 0; background: #fff; flex-wrap: wrap; } }
 </style>

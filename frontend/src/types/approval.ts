@@ -1,8 +1,8 @@
 export type ApprovalUserRole = string
 export type ProcessAppStatus = 'draft' | 'published' | 'inactive'
 export type ProcessVersionStatus = 'draft' | 'published'
-export type ApprovalRequestStatus = 'pending' | 'approved' | 'rejected' | 'revoked'
-export type ApprovalNodeStatus = 'pending' | 'approved' | 'rejected'
+export type ApprovalRequestStatus = 'pending' | 'revision' | 'approved' | 'rejected' | 'revoked'
+export type ApprovalNodeStatus = 'pending' | 'returned' | 'approved' | 'rejected' | 'cancelled'
 export type MonitorStatus = ApprovalRequestStatus
 export type FlowNodeType = 'start' | 'approval' | 'countersign' | 'condition' | 'end'
 export type ApprovalMode = 'single' | 'counter_sign'
@@ -173,6 +173,17 @@ export interface ApprovalAction {
   created_at: string
 }
 
+export interface ApprovalReturnContext {
+  id: number
+  source_node_index: number
+  target_node_index: number | null
+  target_user_id: string
+  target_user_name: string
+  reason: string
+  status: 'active'
+  created_at: string
+}
+
 export interface ApprovalRequestDetail {
   id: number
   type_id: number | null
@@ -190,6 +201,7 @@ export interface ApprovalRequestDetail {
   flow_snapshot: FlowNodeDef[]
   nodes: ApprovalNode[]
   actions: ApprovalAction[]
+  return_context: ApprovalReturnContext | null
   created_at: string
   updated_at: string
   submitted_at: string | null

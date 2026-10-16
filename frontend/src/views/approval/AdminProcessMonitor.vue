@@ -9,6 +9,8 @@ const route = useRoute()
 const router = useRouter()
 const loading = ref(true)
 const failed = ref(false)
+const summaryFailed = ref(false)
+const optionsFailed = ref(false)
 const summary = ref<MonitorSummary | null>(null)
 const requestPage = ref<MonitorRequestPage>({ items: [], total: 0, page: 1, page_size: 20 })
 const processApps = ref<ProcessApp[]>([])
@@ -20,6 +22,10 @@ const selectedItem = ref<MonitorRequestItem | null>(null)
 const detail = ref<ApprovalRequestDetail | null>(null)
 
 const filters = reactive({ processAppId: undefined as number | undefined, status: undefined as ApprovalRequestStatus | undefined, submittedRange: [] as Dayjs[], department: '', applicant: '', currentApproverId: undefined as string | undefined, overdue: undefined as boolean | undefined, page: 1 })
+const overdueFilterValue = computed<string | undefined>({
+  get: () => filters.overdue === undefined ? undefined : String(filters.overdue),
+  set: (value) => { filters.overdue = value === undefined ? undefined : value === 'true' },
+})
 
 const metrics = computed(() => [
   { key: 'total', title: '流程总数', value: summary.value?.total ?? 0 },
@@ -30,7 +36,7 @@ const metrics = computed(() => [
   { key: 'overdue', title: '已超时', value: summary.value?.overdue ?? 0, danger: true },
 ])
 const statusMeta: Record<ApprovalRequestStatus, { label: string; color: string }> = {
-  pending: { label: '审批中', color: 'processing' }, approved: { label: '已通过', color: 'success' }, rejected: { label: '已驳回', color: 'error' }, revoked: { label: '已撤回', color: 'default' },
+  pending: { label: '审批中', color: 'processing' }, revision: { label: '待修改', color: 'warning' }, approved: { label: '已通过', color: 'success' }, rejected: { label: '已驳回', color: 'error' }, revoked: { label: '已撤回', color: 'default' },
 }
 const detailFields = computed(() => ((detail.value?.form_schema_snapshot as { fields?: FormField[] } | null)?.fields || []))
 const detailApprovers = computed(() => {
@@ -84,16 +90,21 @@ function queryParams() {
 }
 async function syncQuery() { const query: Record<string, string> = {}; for (const [key, value] of Object.entries(queryParams())) query[key] = String(value); await router.replace({ query }) }
 async function loadOptions() {
-  const [appsResponse, usersResponse] = await Promise.all([api.get('/api/v1/admin/process-apps'), api.get('/api/v1/admin/users')])
-  processApps.value = appsResponse.data.data
-  users.value = usersResponse.data.data.filter((user: ApprovalUser) => user.is_active)
+  optionsFailed.value = false
+  const [appsResult, usersResult] = await Promise.allSettled([api.get('/api/v1/admin/process-apps'), api.get('/api/v1/admin/users')])
+  if (appsResult.status === 'fulfilled') processApps.value = appsResult.value.data.data
+  else optionsFailed.value = true
+  if (usersResult.status === 'fulfilled') users.value = usersResult.value.data.data.filter((user: ApprovalUser) => user.is_active)
+  else optionsFailed.value = true
 }
 async function load() {
-  loading.value = true; failed.value = false
-  try {
-    const [summaryResponse, requestsResponse] = await Promise.all([api.get('/api/v1/admin/process-monitor/summary'), api.get('/api/v1/admin/process-monitor/requests', { params: queryParams() })])
-    summary.value = summaryResponse.data.data; requestPage.value = requestsResponse.data.data
-  } catch { failed.value = true } finally { loading.value = false }
+  loading.value = true; failed.value = false; summaryFailed.value = false
+  const [summaryResult, requestsResult] = await Promise.allSettled([api.get('/api/v1/admin/process-monitor/summary'), api.get('/api/v1/admin/process-monitor/requests', { params: queryParams() })])
+  if (summaryResult.status === 'fulfilled') summary.value = summaryResult.value.data.data
+  else summaryFailed.value = true
+  if (requestsResult.status === 'fulfilled') requestPage.value = requestsResult.value.data.data
+  else failed.value = true
+  loading.value = false
 }
 async function search() { filters.page = 1; await syncQuery(); await load() }
 async function reset() {
@@ -105,16 +116,18 @@ async function openDetail(record: MonitorRequestItem) {
   selectedItem.value = record; drawerOpen.value = true; drawerLoading.value = true; drawerFailed.value = false; detail.value = null
   try { detail.value = (await api.get(`/api/v1/approvals/requests/${record.id}`)).data.data } catch { drawerFailed.value = true } finally { drawerLoading.value = false }
 }
-onMounted(async () => { readQuery(); try { await loadOptions(); await load() } catch { failed.value = true; loading.value = false } })
+onMounted(async () => { readQuery(); await Promise.all([loadOptions(), load()]) })
 </script>
 
 <template>
   <div class="page-frame monitor-page">
     <header class="page-heading"><div><p class="eyebrow">PROCESS OPERATIONS</p><h1>流程监控</h1><p>集中查看流程实例与处理进度，仅提供只读追溯。</p></div></header>
     <a-skeleton v-if="loading && !summary" active :paragraph="{ rows: 12 }" />
-    <a-alert v-else-if="failed" class="page-alert" type="error" show-icon message="流程监控加载失败"><template #action><a-button size="small" @click="load">重试</a-button></template></a-alert>
+    <a-alert v-else-if="failed" class="page-alert" type="error" show-icon message="流程实例加载失败"><template #action><a-button size="small" @click="load">重试</a-button></template></a-alert>
     <template v-else>
-      <section class="monitor-stats" aria-label="流程统计"><div v-for="metric in metrics" :key="metric.key" class="monitor-stat" :class="{ overdue: metric.danger }"><a-statistic :title="metric.title" :value="metric.value" /></div></section>
+      <a-alert v-if="summaryFailed" class="page-alert" type="warning" show-icon message="统计汇总暂时不可用，流程实例仍可正常查看"><template #action><a-button size="small" @click="load">重试统计</a-button></template></a-alert>
+      <a-alert v-if="optionsFailed" class="page-alert" type="warning" show-icon message="部分筛选选项加载失败，可继续查看全部流程实例"><template #action><a-button size="small" @click="loadOptions">重试选项</a-button></template></a-alert>
+      <section v-if="summary" class="monitor-stats" aria-label="流程统计"><div v-for="metric in metrics" :key="metric.key" class="monitor-stat" :class="{ overdue: metric.danger }"><a-statistic :title="metric.title" :value="metric.value" /></div></section>
       <section class="monitor-filter-region" aria-label="流程筛选"><a-form layout="vertical" class="monitor-filters" @submit.prevent="search">
         <a-form-item label="流程应用"><a-select v-model:value="filters.processAppId" aria-label="流程应用筛选" allow-clear placeholder="全部流程应用" :options="processApps.map((app) => ({ value: app.id, label: app.name }))" /></a-form-item>
         <a-form-item label="运行状态"><a-select v-model:value="filters.status" aria-label="运行状态筛选" allow-clear placeholder="全部状态" :options="Object.entries(statusMeta).map(([value, meta]) => ({ value, label: meta.label }))" /></a-form-item>
@@ -122,7 +135,7 @@ onMounted(async () => { readQuery(); try { await loadOptions(); await load() } c
         <a-form-item label="申请部门"><a-input v-model:value="filters.department" aria-label="申请部门筛选" allow-clear placeholder="输入部门" @press-enter="search" /></a-form-item>
         <a-form-item label="申请人"><a-input v-model:value="filters.applicant" aria-label="申请人筛选" allow-clear placeholder="输入姓名" @press-enter="search" /></a-form-item>
         <a-form-item label="当前审批人"><a-select v-model:value="filters.currentApproverId" aria-label="当前审批人筛选" allow-clear placeholder="全部审批人" :options="users.map((user) => ({ value: user.id, label: `${user.display_name} | ${user.department} | ${user.position}` }))" /></a-form-item>
-        <a-form-item label="是否超时"><a-select v-model:value="filters.overdue" aria-label="是否超时筛选" allow-clear placeholder="全部" :options="[{ value: true, label: '是' }, { value: false, label: '否' }]" /></a-form-item>
+        <a-form-item label="是否超时"><a-select v-model:value="overdueFilterValue" aria-label="是否超时筛选" allow-clear placeholder="全部" :options="[{ value: 'true', label: '是' }, { value: 'false', label: '否' }]" /></a-form-item>
         <a-form-item class="filter-actions"><a-space wrap><a-button type="primary" html-type="submit">查询</a-button><a-button @click="reset">重置</a-button></a-space></a-form-item>
       </a-form></section>
       <section class="monitor-table-region" aria-label="流程实例列表">

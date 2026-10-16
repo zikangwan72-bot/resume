@@ -49,7 +49,7 @@ async function quickReject(item: PendingItem) {
         <h1>待我审批</h1>
         <p>共 {{ items.length }} 项待处理</p>
       </div>
-      <PageBackButton fallback="/modules/approval-center" />
+      <div class="heading-actions"><PageBackButton fallback="/modules/approval-center" /></div>
     </header>
 
     <a-skeleton v-if="loading" active :paragraph="{ rows: 6 }" />
@@ -57,7 +57,8 @@ async function quickReject(item: PendingItem) {
     <a-empty v-else-if="items.length === 0" description="没有待审批项" />
     <a-list v-else class="record-list" :data-source="items"><template #renderItem="{ item }"><a-list-item class="pending-card-full">
         <a-button type="link" class="pending-main" @click="router.push(`/modules/approval-center/${item.request.id}`)"><strong>{{ item.request.title }}</strong><small>{{ item.request.applicant_name }} · {{ item.request.created_at.slice(0, 10) }}</small></a-button>
-        <div class="pending-actions">
+        <div v-if="item.kind === 'revision'" class="pending-actions"><a-tag color="warning">待修改</a-tag></div>
+        <div v-else class="pending-actions">
           <a-button size="small" type="primary" @click="quickApprove(item)"><CheckCircleOutlined /> 同意</a-button>
           <a-button size="small" danger @click="quickReject(item)"><CloseCircleOutlined /> 驳回</a-button>
         </div>
