@@ -10,7 +10,7 @@ test('restores all trial accounts and opens the workbench after login', async ({
   await page.reload()
 
   await expect(page.getByRole('heading', { name: '企业AI工作流平台' })).toBeVisible()
-  await expect(page.locator('.role-option')).toHaveCount(20)
+  await expect(page.locator('.role-option')).toHaveCount(22)
   await expect(page.getByRole('button', { name: /资产管理员A/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /员工一/ })).toBeVisible()
 
