@@ -7,16 +7,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import router
 from app.approval.admin_router import admin_router as approval_admin_router
 from app.approval.router import router as approval_router
-from app.approval.seed import initialize_approval_db
+from app.approval.seed import initialize_approval_schema, seed_approval_demo_data
 from app.core.config import settings
-from app.db.seed import initialize_database
+from app.db.seed import initialize_schema, seed_demo_data
 from app.screening.router import router as screening_router
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    initialize_database()
-    initialize_approval_db()
+    initialize_schema()
+    initialize_approval_schema()
+    if settings.should_seed_demo:
+        seed_demo_data()
+        seed_approval_demo_data()
     yield
 
 

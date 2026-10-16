@@ -227,8 +227,16 @@ PROCESS_APP_SEEDS = [
 ]
 
 
-def initialize_approval_db() -> None:
+def initialize_approval_schema() -> None:
     ApprovalBase.metadata.create_all(bind=approval_engine)
+
+
+def initialize_approval_db() -> None:
+    initialize_approval_schema()
+    seed_approval_demo_data()
+
+
+def seed_approval_demo_data() -> None:
     with ApprovalSessionLocal() as db:
         approval_user_ids = [user["id"] for user in APPROVAL_USERS]
         existing_users = {

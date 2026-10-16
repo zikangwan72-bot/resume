@@ -353,12 +353,20 @@ def initialize_screening_schema() -> None:
     Base.metadata.create_all(bind=engine)
 
 
-def initialize_database() -> None:
+def initialize_schema() -> None:
     Base.metadata.create_all(bind=engine)
     ensure_user_schema()
     ensure_asset_schema()
     ensure_recruitment_schema()
     ensure_service_desk_schema()
+
+
+def initialize_database() -> None:
+    initialize_schema()
+    seed_demo_data()
+
+
+def seed_demo_data() -> None:
     with SessionLocal() as db:
         db.execute(delete(User).where(User.role == "auditor"))
         db.commit()

@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
     public_app_url: str = ""
+    # None = seed only in development/test. Seeding rewrites demo users, so
+    # set SEED_DEMO=false when a development backend points at shared data.
+    seed_demo: bool | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -47,6 +50,12 @@ class Settings(BaseSettings):
 
     @property
     def demo_auth_enabled(self) -> bool:
+        return self.app_env.lower() in {"development", "test"}
+
+    @property
+    def should_seed_demo(self) -> bool:
+        if self.seed_demo is not None:
+            return self.seed_demo
         return self.app_env.lower() in {"development", "test"}
 
     def validate_runtime_config(self) -> None:
