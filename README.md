@@ -67,15 +67,30 @@ npm run dev
 
 系统支持Supabase PostgreSQL和Storage。云端模式通过后端`.env`中的`DATABASE_URL`、`APPROVAL_DATABASE_URL`、`SUPABASE_URL`、`SUPABASE_ANON_KEY`和`SUPABASE_SERVICE_ROLE_KEY`启用；当前登录仍由后端本地用户表校验，健康检查会明确标注这一点。
 
+### 数据库迁移（Alembic）
+
+表结构由 `backend/migrations` 管理，分两套：主业务表和审批表，各自有版本表（`alembic_version`、`alembic_version_approval`）。在 `backend` 目录执行：
+
+```powershell
+.\.venv\Scripts\alembic.exe upgrade head                 # 主业务表
+.\.venv\Scripts\alembic.exe -n approval upgrade head     # 审批表
+# 改了模型后生成迁移（先在本地库上验证）：
+.\.venv\Scripts\alembic.exe revision --autogenerate -m "说明"
+```
+
+`tests/test_migrations.py` 会检查迁移结果与模型一致，模型改了却没写迁移时测试会失败。
+
 ## 检查
 
 ```powershell
 .\scripts\check.ps1
 ```
 
+GitHub Actions（`.github/workflows/ci.yml`）在 Linux 上跑同样的后端测试、前端类型检查、构建和 Playwright e2e。
+
 ## 业务数据说明
 
-首次启动会写入可操作试用种子，用于展示真实数据库流程；之后的新增、编辑、删除、投递和状态更新都会持久化到当前配置的数据库。种子不会覆盖已有业务记录。
+开发和测试环境（`APP_ENV=development/test`）启动时会写入可操作试用种子，用于展示真实数据库流程；之后的新增、编辑、删除、投递和状态更新都会持久化到当前配置的数据库。种子会重置演示账号的资料和密码，所以后端连接共享数据库（如 Supabase）时，请在 `.env` 设 `SEED_DEMO=false`。
 
 当前阶段明确不接入 AI，后续可在不改变核心业务模型的情况下增加简历解析、岗位匹配、资产异常解释和处置建议。
 
