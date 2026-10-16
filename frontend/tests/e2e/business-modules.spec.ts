@@ -20,6 +20,8 @@ test('recruitment candidate and management portals use separate entry routes', a
 
 test('dashboard provides direct entries to asset and AI resume screening', async ({ page }) => {
   await loginAsAdmin(page)
+  // 等工作台的健康状态加载完再点击，避免页面重排时点击落空
+  await expect(page.getByText(/已就绪/)).toBeVisible()
 
   const assetCard = page.locator('.module-card').filter({ hasText: '全资产管理' })
   await expect(assetCard).toBeVisible()

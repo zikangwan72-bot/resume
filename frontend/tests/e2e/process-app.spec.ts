@@ -830,6 +830,8 @@ test('Task10 reports a local cycle and canonicalizes legacy countersign editing'
 })
 
 test('Task11 submits a high-value purchase with a stable idempotency key', async ({ page }) => {
+  // 用例里的日期写死在 2026 年 7/8 月，固定浏览器时间，避免随当前月份失败
+  await page.clock.install({ time: new Date('2026-07-25T10:00:00') })
   const app: any = {
     ...seededProcessApps[2],
     form_schema: { fields: [

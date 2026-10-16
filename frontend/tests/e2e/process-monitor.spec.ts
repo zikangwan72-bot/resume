@@ -92,6 +92,8 @@ test('keeps request data visible when only the summary endpoint fails', async ({
 })
 
 test('monitors processes with all typed filters and a read-only request drawer', async ({ page }) => {
+  // 用例里的日期写死在 2026 年 7/8 月，固定浏览器时间，避免随当前月份失败
+  await page.clock.install({ time: new Date('2026-07-25T10:00:00') })
   test.setTimeout(60_000)
   const api = await setupMonitorApi(page)
   await loginAsAdmin(page)
