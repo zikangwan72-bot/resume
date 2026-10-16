@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     # set SEED_DEMO=false when a development backend points at shared data.
     seed_demo: bool | None = None
     log_level: str = "INFO"
+    login_max_failures: int = 5
+    login_window_seconds: int = 300
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

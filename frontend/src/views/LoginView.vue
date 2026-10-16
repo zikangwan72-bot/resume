@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { LockOutlined, MailOutlined, SafetyCertificateOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
+import { isAxiosError } from 'axios'
 
 import { useAuthStore } from '@/stores/auth'
 import type { DemoAccount } from '@/stores/auth'
@@ -67,7 +68,13 @@ async function login() {
     const redirect = localStorage.getItem('enterprise_ai_post_login_redirect')
     localStorage.removeItem('enterprise_ai_post_login_redirect')
     await router.push(redirect || '/dashboard')
-  } catch {
+  } catch (error) {
+    if (isAxiosError(error) && error.response?.status === 429) {
+      const seconds = Number(error.response.headers['retry-after']) || 0
+      const wait = seconds > 60 ? `${Math.ceil(seconds / 60)} 分钟` : `${seconds || 60} 秒`
+      message.error(`登录失败次数过多，请 ${wait}后再试。`)
+      return
+    }
     message.error('登录失败，请检查账号密码或确认FastAPI已经启动。')
   }
 }

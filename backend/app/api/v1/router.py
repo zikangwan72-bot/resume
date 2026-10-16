@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from app.business.asset_router import router as asset_router
 from app.business.recruitment_router import router as recruitment_router
 from app.business.service_desk_router import router as service_desk_router
 from app.core.config import settings
+from app.core.rate_limit import LoginRateLimiter
 from app.core.security import (
     create_access_token,
     get_current_user,
@@ -25,6 +27,7 @@ from app.integrations.supabase import get_supabase_status
 from app.integrations.storage import StorageUploadError, upload_bytes
 
 router = APIRouter()
+logger = logging.getLogger("app.auth")
 
 router.include_router(asset_router)
 router.include_router(recruitment_router)
@@ -158,15 +161,37 @@ def demo_accounts() -> dict[str, Any]:
     }
 
 
+# Per account: max_failures in the window. Per IP: more headroom, since one
+# office NAT can front many people.
+account_login_limiter = LoginRateLimiter(settings.login_max_failures, settings.login_window_seconds)
+ip_login_limiter = LoginRateLimiter(settings.login_max_failures * 4, settings.login_window_seconds)
+
+
 @router.post("/auth/login")
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
-    user = db.scalar(select(User).where(User.email == payload.email.strip().lower()))
+    email = payload.email.strip().lower()
+    client_ip = request.client.host if request.client else "unknown"
+    retry_after = max(
+        account_login_limiter.retry_after(email), ip_login_limiter.retry_after(client_ip)
+    )
+    if retry_after:
+        logger.warning("login throttled for %s from %s (retry in %ss)", email, client_ip, retry_after)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed login attempts, please try again later",
+            headers={"Retry-After": str(retry_after)},
+        )
+    user = db.scalar(select(User).where(User.email == email))
     if (
         user is None
         or not user.is_active
         or not verify_password(payload.password, user.password_hash)
     ):
+        account_login_limiter.record_failure(email)
+        ip_login_limiter.record_failure(client_ip)
+        logger.info("login failed for %s from %s", email, client_ip)
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    account_login_limiter.reset(email)
     write_login_audit(db, request, user, "password_login")
     db.commit()
     return {"data": auth_payload(user)}

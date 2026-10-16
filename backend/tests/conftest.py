@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.v1.router import account_login_limiter, ip_login_limiter
 from app.approval.database import ApprovalBase, ApprovalSessionLocal, approval_engine
 from app.approval.seed import initialize_approval_db
 from app.db.database import Base, engine
@@ -27,6 +28,8 @@ from app.main import app
 @pytest.fixture(autouse=True)
 def database():
     app.dependency_overrides.clear()
+    account_login_limiter.clear()
+    ip_login_limiter.clear()
     engine.dispose()
     approval_engine.dispose()
     Path("test_enterprise_ai.db").unlink(missing_ok=True)
