@@ -15,6 +15,8 @@ async function logout(page: Page) {
 test('employee submits a ticket, IT claims it, asks for details, resolves, employee confirms', async ({ page }) => {
   const title = `E2E 打印机脱机 ${Date.now()}`
   const drawer = page.locator('.service-ticket-drawer')
+  // Four log-in/log-out hops: ~13s alone, can exceed the 30s default when the suite runs in parallel.
+  test.setTimeout(60_000)
 
   await login(page, 'employee01@demo.local')
   await page.goto('/modules/service-desk')
