@@ -2,12 +2,18 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, enterprise-ai-suite, "improve/**"]
   pull_request:
+    branches: [main, enterprise-ai-suite]
 
+# A newer run on the same branch/PR cancels the older one.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+# Public repo: read-only token, no secrets. Tests use SQLite and test-only env vars.
+permissions:
+  contents: read
 
 jobs:
   backend:
